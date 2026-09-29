@@ -266,6 +266,91 @@ def cmd_requalify(args) -> int:
     return 0
 
 
+def cmd_attio_setup(args) -> int:
+    """Create the License Leads object in Attio. Dry run unless --write.
+    Prints schema names only."""
+    from . import attio
+
+    log = logging.getLogger("licmon")
+    if args.write and not attio.configured():
+        raise SystemExit("ATTIO_API_KEY (or ATTIO_WRITE_API_KEY) is not set")
+    client = attio.Client() if attio.configured() else None
+    try:
+        steps = attio.setup(client, args.write)
+    except attio.AttioError as exc:
+        log.error("%s", exc)
+        return 1
+    for step in steps:
+        indented = step.startswith(" ")
+        print(step if indented or args.write else f"would {step}")
+    if not args.write:
+        print("dry run: nothing changed in Attio. Add --write to create it."
+              + ("" if client else " (no API key set, so the workspace was not checked)"))
+    return 0
+
+
+def cmd_attio_sync(args) -> int:
+    """Upsert the day's Hot and A venues into Attio. Dry run unless --write.
+    Logs counts only: Actions logs are public."""
+    from . import attio, leadsheet
+
+    log = logging.getLogger("licmon")
+    if not attio.configured():
+        if args.write:
+            log.info("attio sync skipped (not configured)")
+            return 0
+        client = None
+    else:
+        client = attio.Client()
+    day = args.date or datetime.now(timezone.utc).date()
+    with db.connect() as conn:
+        rows = leadsheet.load_rows(conn, day)
+    try:
+        counts = attio.sync(client, rows, write=args.write)
+    except attio.AttioError as exc:
+        log.error("%s", exc)  # AttioError text is "attio failed (<status or type>)"
+        return 1
+    if args.counts:
+        attio.write_counts(args.counts, counts)
+    log.info("attio sync%s: %d candidates (%d hot), %s %d, updated %d, over daily cap %d",
+             "" if args.write else " (dry run)", counts["candidates"], counts["hot"],
+             "created" if args.write else "would create", counts["created"],
+             counts["updated"], counts["over_cap"])
+    return 0
+
+
+def cmd_slack(args) -> int:
+    """Ping the team's Slack channel when there are new or stage-advanced
+    leads. --preview prints the message on this machine instead of posting."""
+    from . import attio, leadsheet, slack
+
+    log = logging.getLogger("licmon")
+    if args.preview and os.environ.get("GITHUB_ACTIONS"):
+        raise SystemExit("--preview prints lead names; never run it in GitHub Actions")
+    if not args.preview and not slack.configured():
+        log.info("slack skipped (not configured)")
+        return 0
+    day = args.date or datetime.now(timezone.utc).date()
+    with db.connect() as conn:
+        rows = leadsheet.load_rows(conn, day)
+    if not slack.is_news(rows):
+        log.info("slack skipped (no new or stage-advanced leads)")
+        return 0
+    counts = attio.read_counts(args.counts) if args.counts else None
+    text = slack.compose(rows, counts, os.environ.get("ATTIO_LEADS_URL", "").strip() or None)
+    if args.preview:
+        print(text)
+        return 0
+    try:
+        slack.post(text)
+    except slack.SlackError as exc:
+        log.error("%s", exc)
+        return 1
+    log.info("slack posted: %d leads (%d hot)", len(rows),
+             sum(1 for r in rows if r.get("hot")))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     p = argparse.ArgumentParser(prog="licmon", description=__doc__)
@@ -309,6 +394,25 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("requalify", help="re-apply qualification rules").set_defaults(
         func=cmd_requalify)
+
+    a = sub.add_parser("attio-setup", help="create the License Leads object in Attio "
+                                           "(dry run unless --write)")
+    a.add_argument("--write", action="store_true", help="really create it")
+    a.set_defaults(func=cmd_attio_setup)
+
+    s = sub.add_parser("attio-sync", help="send the day's Hot and A venues to Attio "
+                                          "(dry run unless --write)")
+    s.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
+    s.add_argument("--write", action="store_true", help="really write to Attio")
+    s.add_argument("--counts", metavar="FILE", help="write counts-only JSON here for Slack")
+    s.set_defaults(func=cmd_attio_sync)
+
+    k = sub.add_parser("slack", help="ping Slack about new leads (SLACK_WEBHOOK_URL)")
+    k.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
+    k.add_argument("--counts", metavar="FILE", help="Attio counts JSON from attio-sync")
+    k.add_argument("--preview", action="store_true",
+                   help="print the message here instead of posting (local only)")
+    k.set_defaults(func=cmd_slack)
 
     args = p.parse_args(argv)
     try:
