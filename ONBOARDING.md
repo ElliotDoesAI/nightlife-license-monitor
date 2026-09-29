@@ -167,18 +167,45 @@ time. If it landed there, mark it "Not spam".
 
 ## What the daily email looks like
 
-The message itself is short: how many new leads came in, how many are
-nightclubs, bars or restaurants, which cities they are in, and whether every source ran clean. It
-holds no business names. The leads are in the attached Excel file.
+The message itself is short: how many new leads came in, how many are Hot,
+how many are nightclubs, bars or restaurants, which cities they are in, and
+whether every source ran clean. It holds no business names. The leads are in
+the attached Excel file.
 
-Each spreadsheet row is one venue: priority (A, B, or C), business name,
-company or owner, business type, what was filed (new application, change of
-owner, new location, and so on), status, filed on date, phone and owner names
-when the state publishes them (Washington does), address, market, mailing
-address (California and Florida publish one), license applied for, clickable
-Map, Google and Instagram search links you open by hand to find a phone
-number or website, the official record link, and the Lead ID numbers you use
-when you tell Claude Code which leads to mark reviewed.
+The Excel file has tabs along the bottom:
+
+- **New**: today's leads.
+- **All open**: every lead you have not marked reviewed yet, from any day.
+- **One tab per state** (like NY, TX, IL): the All open list split by state.
+- **How scoring works**: what the score and the labels mean.
+
+On every tab the best leads are at the top. Each row is one venue:
+
+- **Priority**: A, B or C (see below).
+- **Hot**: says Hot for the nightclubs most worth calling first.
+- **Score**: 0 to 100. Higher is a better fit for ticketing. It adds up the
+  kind of venue, a nightlife license (like a Chicago amusement license or
+  Texas late hours), how far along the license is, and whether it is a new
+  place.
+- **What's new** (New tab): New filing, Stage advanced (a filing we already
+  had moved a step forward, like from received to approved), or Details
+  changed.
+- **Stage**: how far along the license is. Received (just filed), In review,
+  Approved, or Licensed.
+- Then the business name, company or owner, business type, what was filed
+  (new application, change of owner, new location, and so on), filed on
+  date, phone and owner names when the state publishes them (Washington
+  does), address, market, mailing address (California and Florida publish
+  one), license applied for, clickable Map, Google and Instagram search links
+  you open by hand to find a phone number or website, the official record
+  link, and the Lead ID numbers you use when you tell Claude Code which leads
+  to mark reviewed.
+
+Once they are set up, the same run also puts the Hot and A leads into a
+"License Leads" list in Attio, and posts a short note in your team's Slack
+channel when new leads come in. The Slack note shows the counts and a few
+Hot venue names with their city. Addresses and phone numbers stay in the
+spreadsheet and Attio.
 
 The email comes even on quiet days (with no file attached then), so if a
 morning email is missing, something needs a look. To open the file, double
@@ -198,11 +225,13 @@ in plain words. For example:
 - "Only show me Houston tier A leads from this week."
 - "Pause the scraper." / "Turn it back on."
 - "Send the daily email to my partner too."
+- "What would go to Attio today?"
+- "Set up the Slack ping."
 
 Priority: **A** is nightclubs and lounges. **B** is obvious bars and event
 venues, like taverns, pubs, taprooms, breweries, comedy clubs and event
 centers. **C** is restaurants. Coffee shops, bakeries and big chains are left
-out. Start with the A rows. If a lead is in the wrong tier, tell Claude Code.
+out. Start with the Hot rows, then the rest of the A rows. If a lead is in the wrong tier, tell Claude Code.
 It can adjust the rules.
 
 ## Good to know

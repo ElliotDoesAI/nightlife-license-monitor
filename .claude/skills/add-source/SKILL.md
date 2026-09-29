@@ -25,12 +25,22 @@ tell the owner and suggest a public-records request instead.
    source repeats rows in different shapes. `fetch` returns raw bytes
    untouched; `parse` yields `Record`s with a `category` from
    `models.CATEGORIES` (map each license type deliberately).
+   For the lead score, also override `stage(rec)` (map this source's status
+   wording to Licensed / Approved / In review / Received; unmapped wording
+   falls back to `stage.from_status`), `nightlife_license(rec)` (return keys
+   of `qualify.NIGHTLIFE_LICENSE_POINTS`, such as `late_hours`, for the
+   state's nightlife license types; add a new key there only if the state
+   has a genuinely new kind) and, if old records would look new,
+   `stage_counts(rec, today)` (see `fl_abt.py`). Both read normalized fields
+   only, never `rec.raw`, because `licmon requalify` has no raw rows. The
+   shared points table does not change per state.
 4. Register it in `src/licmon/sources/__init__.py` and bump the source count
    in the registry test (`tests/test_socrata_sources.py`).
 5. New state: add its metros and counties to `METRO_COUNTIES` in
    `src/licmon/metros.py`. Make sure the parser's county names match.
 6. Test with a synthetic fixture (fake names/addresses) in `tests/fixtures/`
-   and `tests/test_<name>.py`, no network. Run the full suite on the
+   and `tests/test_<name>.py`, no network. Add the new source's stage and
+   nightlife-license cases to `tests/test_stage_score.py`. Run the full suite on the
    disposable database (AGENTS.md, "Developing").
 7. `uv run licmon probe --source <name>`: record count, how many in target
    metros, category mix. Sanity-check a few parsed records against the

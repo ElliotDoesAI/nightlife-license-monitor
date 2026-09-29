@@ -52,7 +52,9 @@ something. Never ask for a password or connection string in chat.
    Team lifts this). The `keepalive` job handles GitHub's 60-day schedule
    rule for public repos. Check with
    `gh repo view --json visibility -q .visibility` (should say `PUBLIC`).
-9. **Today's leads.** Export to the Desktop and open it:
+9. **Today's leads.** Once after the lead-score update, re-score stored
+   records so older leads get a Score and Stage: `uv run licmon requalify`.
+   Then export to the Desktop and open it:
 
    ```bash
    uv run licmon export --out ~/Desktop/leads-$(date -u +%F).xlsx
@@ -61,6 +63,10 @@ something. Never ask for a password or connection string in chat.
 
    Summarize counts by metro and tier. Do not paste the whole list into chat
    unless asked.
+10. **Attio and Slack (optional, ask first).** Skill `attio-sync` (one-time
+    `attio-setup`, then the `ATTIO_API_KEY` secret) and skill `slack-setup`
+    (Dylan makes the webhook in the browser). Each step skips itself until
+    set up.
 
 Finish by telling Dylan what is set up and that the email will arrive each
 morning (the run is at 15:30 UTC).

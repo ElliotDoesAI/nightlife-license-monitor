@@ -49,8 +49,13 @@ point at ABC's public license lookup page for a human to open.
 5. `qualify.py` applies deterministic rules: target metro, license category,
    application type (new / relocation / ownership change beat renewals),
    name keywords, exclusion words. Each lead gets a score, a tier (A/B/C
-   venue kind, defined in AGENTS.md) and a plain reason.
-6. Qualified new or changed records are queued. A source's very first run is a
+   venue kind, defined in AGENTS.md) and a plain reason. Every record also
+   gets a stage (Licensed, Approved, In review, Received) from its source's
+   own status wording, and qualified leads get a 0 to 100 lead score and a
+   Hot label (tier A, score 75 or more). The points table is in AGENTS.md.
+6. Qualified new or changed records are queued. A change whose stage moves
+   up is marked in `record_events.changes` and shows as "Stage advanced".
+   A source's very first run is a
    silent baseline except for applications dated in the last 14 days.
 7. A failing source is logged, stored with its traceback in `source_runs`, does
    not stop the others, and makes the workflow exit non-zero (red run + email).
@@ -59,6 +64,10 @@ point at ABC's public license lookup page for a human to open.
    no lead details). It sends on empty days too (heartbeat) and skips itself when the SMTP
    secrets are not set. `licmon email --preview DIR` writes the message to
    files instead of sending.
+9. `licmon attio-sync --write` upserts the day's Hot and A venues into the
+   Attio "License Leads" object, and `licmon slack` pings the team's Slack
+   channel when there is a new or stage-advanced lead. Both skip themselves
+   when their secret is not set and log counts only.
 
 ## Review queue
 
@@ -76,21 +85,32 @@ uv run licmon export --all --open --out open.xlsx
 uv run licmon review 123 456 --status approved --note "call next week"
 uv run licmon email --preview ~/Desktop/email-preview   # see the daily email
 uv run licmon requalify                    # after editing qualify.py / metros.py
+uv run licmon attio-sync                   # dry run: what would go to Attio (counts)
+uv run licmon slack --preview              # print today's Slack message here
 ```
 
 Never run `export` inside GitHub Actions: its logs are public.
 
 ## The spreadsheet
 
-`licmon export` builds one clean row per venue per day from the
-`daily_leads` view: several applications for the same premises are merged
-into one lead, and the Lead ID cell lists every record id. A file name ending
-in `.xlsx` writes Excel, anything else writes the same clean sheet as CSV.
+`licmon export` builds one clean row per venue per day from the review
+queue: several applications for the same premises are merged into one lead,
+and the Lead ID cell lists every record id. A file name ending in `.xlsx`
+writes the Excel workbook, anything else writes the New sheet as CSV.
 
-Columns: Priority, Business name, Company / owner, Business type, Filing,
-Status, Filed on, Phone, Owner / applicant names, Address, City, State, ZIP,
-Market, Mailing address, License applied for, Map, Google, Instagram,
-Official record, Lead ID.
+Tabs, each sorted by score, highest first:
+
+* **New**: the leads asked for (today by default, or `--date` / `--all`).
+* **All open**: every lead not yet reviewed, from all days.
+* **One tab per state** that has open leads (from the data, not a fixed list).
+* **How scoring works**: the points table and what each label means.
+
+Columns: Priority, Hot, Score, Business name, What's new (New filing, Stage
+advanced or Details changed), Company / owner, Business type, Filing, Stage,
+Filed on, Phone, Owner / applicant names, Address, City, State, ZIP, Market,
+Mailing address, License applied for, Map, Google, Instagram, Official
+record, Lead ID. The All open and state tabs show Queued on in place of
+What's new.
 
 Contact details come only from the official records: Washington publishes a
 phone number and applicant names, California and Florida publish a mailing
@@ -101,8 +121,8 @@ Automatic lookups on other sites are out of scope (PRD).
 ## The daily email
 
 After collecting, the workflow runs `licmon email`: one short counts-only
-message (new leads by priority and market, whether every source ran) with
-the day's spreadsheet attached. The body never holds lead details. It sends
+message (new leads by priority and market, how many are Hot, whether every
+source ran) with the workbook attached. The body never holds lead details. It sends
 even on days with no leads (no attachment then), so a missing email means
 something is wrong. It skips itself when the email settings are missing and
 the run stays green. Settings and troubleshooting live in AGENTS.md.
@@ -110,7 +130,7 @@ the run stays green. Settings and troubleshooting live in AGENTS.md.
 ## Repo layout
 
 ```text
-src/licmon/          pipeline, qualification, spreadsheet, email, CLI
+src/licmon/          pipeline, qualification, stage, spreadsheet, email, Attio, Slack, CLI
 src/licmon/sources/  one connector per official source
 .github/workflows/  daily-collect (daily.yml), tests (ci.yml), probe (probe.yml)
 tests/               deterministic tests with synthetic fixtures only
@@ -126,6 +146,9 @@ scripts/             package_for_client.sh builds the handover zip
 3. Email (optional): secrets `SMTP_USERNAME`, `SMTP_PASSWORD` (a Gmail app
    password), `LEADS_EMAIL_TO`, optional `LEADS_EMAIL_FROM`; variables
    `SMTP_HOST` / `SMTP_PORT` default to `smtp.gmail.com` / `587`.
+   Attio and Slack (optional): secrets `ATTIO_API_KEY`, `SLACK_WEBHOOK_URL`;
+   variables `ATTIO_DAILY_CAP`, `ATTIO_LEADS_URL`, `HOT_MIN_SCORE`. Run
+   `licmon attio-setup --write` once first (see AGENTS.md).
 4. Actions → `daily-collect` → Run workflow, once, to take the baseline.
 5. It then runs daily at 15:30 UTC.
 
@@ -152,6 +175,7 @@ synthetic fixtures only. Never use the real database or commit real records.
 ### Adding a source
 
 Write `src/licmon/sources/<name>.py` with a `Source` subclass (`fetch` returns
-raw snapshots untouched, `parse` yields `Record`s with a `category`), register
-it in `sources/__init__.py`, add metro counties/cities in `metros.py` if it is a
+raw snapshots untouched, `parse` yields `Record`s with a `category`, `stage`
+maps the source's status wording, `nightlife_license` names its nightlife
+license types), register it in `sources/__init__.py`, add metro counties/cities in `metros.py` if it is a
 new state, and add a test with a synthetic fixture. Nothing else changes.
