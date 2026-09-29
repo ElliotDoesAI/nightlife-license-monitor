@@ -241,6 +241,8 @@ def cmd_requalify(args) -> int:
             "application_date", "address", "city", "state", "zip", "county", "category")
     # raw is not needed to requalify
     changed = 0
+    with db.connect() as conn:
+        db.init_schema(conn)  # new score columns may not exist yet
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT {', '.join(cols)}, qualified, score, tier, qualify_reason, "
                     "metro, venue_key, stage, lead_score, hot FROM records")
