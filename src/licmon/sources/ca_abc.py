@@ -207,6 +207,19 @@ class CaAbcSource(Source):
     tracks_removals = True
     min_records = 1000
 
+    def contact(self, raw: dict) -> dict:
+        for row in raw.get("rows") or []:
+            parts = [_clean(row.get(k)) for k in ("Mail Addr 1", "Mail Addr 2")]
+            street = " ".join(p for p in parts if p)
+            if not street:
+                continue
+            city, state, zip_code = (_clean(row.get(k)) for k in
+                                     ("Mail City", "Mail State", "Mail Zip"))
+            tail = " ".join(p for p in (state, zip_code) if p)
+            line = ", ".join(p for p in (street, city, tail) if p)
+            return {"mailing_address": line}
+        return {}
+
     def fetch(self, http: Http) -> list[Snapshot]:
         return [http.get(EXPORT_URL)]
 

@@ -338,6 +338,11 @@ class WaLcbSource(Source):
     def fetch(self, http: Http) -> list[Snapshot]:
         return [http.get(URL)]
 
+    def contact(self, raw: dict) -> dict:
+        people = "; ".join(
+            p.strip() for p in (raw.get("Applicant(s)") or "").split(";") if p.strip())
+        return {"phone": raw.get("Contact Phone") or None, "people": people or None}
+
     def parse(self, snapshots: list[Snapshot]) -> Iterable[Record]:
         # Group tbodies by (license_number, application_type) so a license
         # that moved through sections collapses to one record at the most

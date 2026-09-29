@@ -26,7 +26,7 @@ def snap(rows):
 
 def test_registry_names_unique():
     names = [s.name for s in all_sources()]
-    assert len(names) == len(set(names)) == 6
+    assert len(names) == len(set(names)) == 7
 
 
 def test_socrata_paging():

@@ -116,7 +116,28 @@ def _queue_rows(conn, day: date | None, open_only: bool, per_record: bool = Fals
 
 
 def cmd_export(args) -> int:
+    from . import leadsheet
+
     day = None if args.all else (args.date or datetime.now(timezone.utc).date())
+    xlsx = bool(args.out and args.out.lower().endswith(".xlsx"))
+    full = args.full or args.per_record
+    if xlsx and full:
+        raise SystemExit("--full / --per-record write CSV only; use a .csv file name")
+    if not full:
+        with db.connect() as conn:
+            rows = leadsheet.load_rows(conn, day, args.open)
+        if xlsx:
+            with open(args.out, "wb") as fh:
+                fh.write(leadsheet.build_xlsx(rows, title=f"Leads {day}" if day else "Leads"))
+        else:
+            out = open(args.out, "w", newline="") if args.out else sys.stdout
+            try:
+                leadsheet.write_csv(rows, out)
+            finally:
+                if args.out:
+                    out.close()
+        print(f"{len(rows)} leads" + (f" -> {args.out}" if args.out else ""), file=sys.stderr)
+        return 0
     with db.connect() as conn:
         columns, rows = _queue_rows(conn, day, args.open, args.per_record)
     out = open(args.out, "w", newline="") if args.out else sys.stdout
@@ -151,6 +172,48 @@ def cmd_status(args) -> int:
     print("queue size by day:")
     for d, n in days:
         print(f"  {d}  {n}")
+    return 0
+
+
+def cmd_email(args) -> int:
+    """Email the day's leads to the owner, or write a local preview.
+
+    Logs say only counts and sent/skipped/failed: workflow logs are public.
+    """
+    from pathlib import Path
+
+    from . import notify
+
+    log = logging.getLogger("licmon")
+    day = args.date or datetime.now(timezone.utc).date()
+    if not args.preview and not notify.email_configured():
+        log.info("email skipped (not configured)")
+        return 0
+    if args.preview:
+        out = Path(args.preview).expanduser().resolve()
+        repo = Path(__file__).resolve().parents[2]
+        if out == repo or repo in out.parents:
+            raise SystemExit("preview folder must be outside the repository (lead data)")
+    with db.connect() as conn:
+        data = notify.load_daily(conn, day)
+    sender, recipients = notify.settings_from_env()
+    leads = data["leads"]
+    tier_a = sum(1 for lead in leads if lead.get("priority") == "A")
+    if args.preview:
+        msg = notify.compose(data, day, sender=sender or "sender@example.com",
+                             recipients=recipients or ["owner@example.com"])
+        paths = notify.write_preview(msg, str(out))
+        print(f"preview for {day}: {len(leads)} leads ({tier_a} tier A), "
+              f"{len(paths)} files -> {out}", file=sys.stderr)
+        return 0
+    msg = notify.compose(data, day, sender=sender, recipients=recipients)
+    try:
+        notify.send(msg)
+    except notify.NotifyError as exc:
+        log.error("%s", exc)  # NotifyError text is "email failed (<ErrorType>)"
+        return 1
+    log.info("email sent: %d leads (%d tier A) to %d recipient(s)",
+             len(leads), tier_a, len(recipients))
     return 0
 
 
@@ -215,14 +278,22 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="latest run per source (no lead data)").set_defaults(
         func=cmd_status)
 
-    e = sub.add_parser("export", help="write the review queue as CSV (local only)")
+    e = sub.add_parser("export", help="write the lead list as .xlsx or .csv (local only)")
     e.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
     e.add_argument("--all", action="store_true", help="every queued lead, all dates")
     e.add_argument("--open", action="store_true", help="only review_status = new")
     e.add_argument("--per-record", action="store_true",
-                   help="one row per application instead of per venue")
-    e.add_argument("--out", help="output file (default stdout)")
+                   help="one row per application, all columns (CSV)")
+    e.add_argument("--full", action="store_true",
+                   help="every stored column instead of the clean lead sheet (CSV)")
+    e.add_argument("--out", help="output file; .xlsx = Excel, else CSV (default stdout)")
     e.set_defaults(func=cmd_export)
+
+    m = sub.add_parser("email", help="email the day's leads to the owner (SMTP env vars)")
+    m.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
+    m.add_argument("--preview", metavar="DIR",
+                   help="write preview files to DIR (outside the repo) instead of sending")
+    m.set_defaults(func=cmd_email)
 
     v = sub.add_parser("review", help="set review status on record id(s)")
     v.add_argument("record_id", type=int, nargs="+")

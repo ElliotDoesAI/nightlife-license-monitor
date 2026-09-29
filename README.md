@@ -3,7 +3,12 @@
 Collects public liquor-license application records every day from official
 sources, keeps the ones that look like new or changing bars, clubs, lounges,
 restaurants and taprooms in major nightlife metros, and puts them in a review
-queue. It never contacts anyone. See `nightlife_liquor_license_monitor_prd.md`.
+queue. It emails the owner the day's list. It never contacts a business. See
+`nightlife_liquor_license_monitor_prd.md`.
+
+Owner: start with `ONBOARDING.md`. Coding agents: `AGENTS.md` is the operating
+guide (`CLAUDE.md` imports it) and `.claude/skills/` holds a step-by-step
+skill for each routine job.
 
 **This repository is public. Lead data never goes in it.** Records, raw
 snapshots, scores and review decisions live only in a private Postgres
@@ -20,6 +25,7 @@ per source, never names or addresses.
 | `chicago_bacp_liquor` | Chicago "Business Licenses", data.cityofchicago.org `r5kz-chrr`, liquor/amusement codes, non-renewals | rolling 180 days |
 | `wa_lcb_actions` | WSLCB "New License Applications, Approvals and Discontinuances", statewide report | rolling 30 days |
 | `ca_abc_applications` | CA ABC Daily Data Export (CSV zip), application rows only | full list, statewide |
+| `fl_abt_licenses` | FL DBPR ABT retail alcoholic beverage licensee extract `bd4006lic.csv` | full licensee list, statewide; leads are **newly issued** licenses (Florida publishes no pending list) |
 
 The California HTML daily report is behind bot protection, so it is not used.
 The official daily export carries the same applications. Per-record CA links
@@ -48,6 +54,11 @@ point at ABC's public license lookup page for a human to open.
    silent baseline except for applications dated in the last 14 days.
 7. A failing source is logged, stored with its traceback in `source_runs`, does
    not stop the others, and makes the workflow exit non-zero (red run + email).
+8. `licmon email` sends the owner the day's `daily_leads`: counts by metro and
+   priority, source health, and an Excel file of every lead (the body holds
+   no lead details). It sends on empty days too (heartbeat) and skips itself when the SMTP
+   secrets are not set. `licmon email --preview DIR` writes the message to
+   files instead of sending.
 
 ## Review queue
 
@@ -60,9 +71,10 @@ On your own machine, with `DATABASE_URL` set:
 
 ```bash
 uv run licmon status                       # last run per source, queue sizes
-uv run licmon export --out today.csv       # today's leads (UTC date)
+uv run licmon export --out today.xlsx      # today's leads (UTC date), clean sheet
 uv run licmon export --all --open --out open.csv
 uv run licmon review 123 456 --status approved --note "call next week"
+uv run licmon email --preview ~/Desktop/email-preview   # see the daily email
 uv run licmon requalify                    # after editing qualify.py / metros.py
 ```
 
@@ -73,11 +85,18 @@ Never run `export` inside GitHub Actions: its logs are public.
 1. Create a private Postgres database (any provider; free tiers are enough).
 2. In the GitHub repo: Settings → Environments → `production` → add secret
    `DATABASE_URL`. Optional: `SOCRATA_APP_TOKEN` (raises open-data rate limits).
-3. Actions → `daily-collect` → Run workflow, once, to take the baseline.
-4. It then runs daily at 15:30 UTC.
+3. Email (optional): secrets `SMTP_USERNAME`, `SMTP_PASSWORD` (a Gmail app
+   password), `LEADS_EMAIL_TO`, optional `LEADS_EMAIL_FROM`; variables
+   `SMTP_HOST` / `SMTP_PORT` default to `smtp.gmail.com` / `587`.
+4. Actions → `daily-collect` → Run workflow, once, to take the baseline.
+5. It then runs daily at 15:30 UTC.
 
 GitHub pauses scheduled workflows in public repos after 60 days without a
-commit and emails a warning first. Re-enable it from the Actions tab.
+commit. The workflow's `keepalive` job pushes an empty commit after 45 quiet
+days to prevent that. If it happens anyway, re-enable it from the Actions tab.
+
+To hand the project over as a zip: `scripts/package_for_client.sh` (committed
+files only, secrets and local state excluded).
 
 ## Development
 

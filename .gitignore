@@ -2,6 +2,9 @@
 data/
 exports/
 *.csv
+*.xlsx
+*.xls
+*.eml
 *.zip
 *.db
 *.sqlite

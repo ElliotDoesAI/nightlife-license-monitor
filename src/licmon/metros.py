@@ -35,6 +35,15 @@ METRO_COUNTIES: dict[str, dict[str, set[str]]] = {
     "WA": {
         "Seattle-Tacoma-Bellevue": {"KING", "PIERCE", "SNOHOMISH"},
     },
+    "FL": {
+        "Miami-Fort Lauderdale-West Palm Beach": {
+            "MIAMI-DADE", "BROWARD", "PALM BEACH"},
+        "Orlando": {"ORANGE", "OSCEOLA", "SEMINOLE", "LAKE"},
+        "Tampa-St. Petersburg": {
+            "HILLSBOROUGH", "PINELLAS", "PASCO", "HERNANDO"},
+        "Jacksonville": {
+            "DUVAL", "ST. JOHNS", "CLAY", "NASSAU", "BAKER"},
+    },
 }
 
 # Fallback for sources with no county field (e.g. the WA LCB report):
@@ -71,9 +80,12 @@ METRO_CITIES: dict[str, dict[str, set[str]]] = {
 def _norm_county(county: str | None) -> str:
     text = (county or "").upper().replace(" COUNTY", "").strip()
     text = text.replace("DU PAGE", "DUPAGE")
-    # NY SLA uses borough names in some rows
+    # NY SLA uses borough names in some rows; FL spellings vary
+    # ("Dade" vs "Miami-Dade", "St Johns" vs "St. Johns").
     return {"MANHATTAN": "NEW YORK", "BROOKLYN": "KINGS",
-            "STATEN ISLAND": "RICHMOND"}.get(text, text)
+            "STATEN ISLAND": "RICHMOND", "DADE": "MIAMI-DADE",
+            "MIAMI DADE": "MIAMI-DADE", "ST JOHNS": "ST. JOHNS",
+            "SAINT JOHNS": "ST. JOHNS"}.get(text, text)
 
 
 def assign_metro(state: str | None, county: str | None, city: str | None) -> str | None:

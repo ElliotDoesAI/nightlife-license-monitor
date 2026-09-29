@@ -29,6 +29,12 @@ class Source(ABC):
     #: reports that show one action in several formats can narrow this.
     material_fields: tuple[str, ...] = MATERIAL_FIELDS
 
+    def contact(self, raw: dict) -> dict:
+        """Contact details the official record itself publishes, from the
+        stored raw row. Keys (all optional): "phone", "people" (owner or
+        applicant names), "mailing_address". Never looked up elsewhere."""
+        return {}
+
     @abstractmethod
     def fetch(self, http: Http) -> list[Snapshot]:
         """Download raw payload(s). Must not modify bytes."""
