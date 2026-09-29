@@ -34,6 +34,7 @@ import io
 import zipfile
 from collections.abc import Iterable
 
+from .. import stage
 from ..http import Http
 from ..models import CATEGORIES, Record, Snapshot
 from .base import Source
@@ -177,6 +178,10 @@ CATEGORY_PRIORITY: tuple[tuple[str, frozenset[str]], ...] = (
 assert all(cat in CATEGORIES for cat, _ in CATEGORY_PRIORITY)
 
 
+# Nightlife license codes -> qualify.NIGHTLIFE_LICENSE_POINTS keys.
+NIGHTLIFE_CODES = {"48": "public_premises", "90": "music_venue"}
+
+
 def categorize(codes: list[str]) -> str:
     """Map license-type codes to one of models.CATEGORIES.
 
@@ -206,6 +211,23 @@ class CaAbcSource(Source):
     homepage = "https://www.abc.ca.gov/licensing/licensing-reports/"
     tracks_removals = True
     min_records = 1000
+
+    def stage(self, rec: Record) -> str | None:
+        # "Type Status" per license type, comma-joined: PEND or ACTIVE.
+        found = []
+        for part in (rec.status or "").upper().split(","):
+            part = part.strip()
+            if part == "ACTIVE":
+                found.append(stage.LICENSED)
+            elif part == "PEND":
+                found.append(stage.RECEIVED)
+            else:
+                found.append(stage.from_status(part))
+        return stage.best(found)
+
+    def nightlife_license(self, rec: Record) -> tuple[str, ...]:
+        codes = {c.strip() for c in (rec.license_type or "").split(",")}
+        return tuple(key for code, key in NIGHTLIFE_CODES.items() if code in codes)
 
     def contact(self, raw: dict) -> dict:
         for row in raw.get("rows") or []:

@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 import psycopg
 
 from . import db
+from . import stage as stage_mod
 from .http import Http, SourceHTTPError
 from .metros import assign_metro
 from .models import MATERIAL_FIELDS, Record, venue_key
@@ -139,7 +140,7 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                     (source.name,))
         res.baseline = cur.fetchone() is None
 
-        cols = ", ".join(("id", "source_record_id", "material_hash", "removed_at")
+        cols = ", ".join(("id", "source_record_id", "material_hash", "removed_at", "stage")
                          + MATERIAL_FIELDS)
         cur.execute(f"SELECT {cols} FROM records WHERE source=%s", (source.name,))
         names = [d.name for d in cur.description]
@@ -148,7 +149,7 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
         inserts, events, touched = [], [], []
         for srid, rec in records.items():
             metro = assign_metro(rec.state, rec.county, rec.city)
-            q = qualify(rec, metro)
+            q = qualify(rec, metro, source=source, today=now.date())
             old = existing.get(srid)
             if old is None:
                 if res.baseline:
@@ -166,6 +167,10 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                 after = rec.material(mfields)
                 changes = {k: [before[k], after[k]] for k in mfields
                            if before[k] != after[k]}
+                old_stage = old["stage"] or _old_stage(source, srid, old)
+                if stage_mod.rank(q.stage) > stage_mod.rank(old_stage):
+                    # Read by the lead sheet and Slack as "Stage advanced".
+                    changes["stage"] = [old_stage, q.stage]
             if old["removed_at"] is not None:
                 changes = dict(changes or {}, relisted=[False, True])
             if changes:
@@ -174,11 +179,12 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                     f"""UPDATE records SET {', '.join(f'{c}=%s' for c in RECORD_COLUMNS)},
                         metro=%s, venue_key=%s, material_hash=%s, raw=%s, last_seen_at=%s,
                         last_changed_at=%s, removed_at=NULL, last_snapshot_id=%s,
-                        qualified=%s, score=%s, tier=%s, qualify_reason=%s
+                        qualified=%s, score=%s, tier=%s, qualify_reason=%s,
+                        stage=%s, lead_score=%s, hot=%s
                         WHERE id=%s""",
                     _values(rec) + [metro, venue_key(rec), rec.material_hash(mfields),
                                     db.jsonb(rec.raw), now, now, snap_id, q.qualified, q.score, q.tier, q.reason,
-                                    old["id"]])
+                                    q.stage, q.lead_score, q.hot, old["id"]])
                 events.append((old["id"], sr_id, "changed", now, db.jsonb(changes),
                                q.qualified))
             else:
@@ -189,18 +195,19 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                         "WHERE id = ANY(%s)", (now, snap_id, touched))
 
         if inserts:
-            placeholders = ", ".join(["%s"] * (len(RECORD_COLUMNS) + 17))
+            placeholders = ", ".join(["%s"] * (len(RECORD_COLUMNS) + 20))
             cur.executemany(
                 f"""INSERT INTO records (source, source_record_id,
                     {', '.join(RECORD_COLUMNS)}, metro, venue_key, material_hash, raw,
                     first_seen_at, last_seen_at, last_changed_at, first_snapshot_id,
                     last_snapshot_id, qualified, score, tier, qualify_reason,
-                    review_status, review_notes)
+                    review_status, review_notes, stage, lead_score, hot)
                     VALUES ({placeholders}) RETURNING source_record_id, id""",
                 [[rec.source, rec.source_record_id] + _values(rec)
                  + [metro, venue_key(rec), rec.material_hash(mfields), db.jsonb(rec.raw),
                     now, now, now,
-                    snap_id, snap_id, q.qualified, q.score, q.tier, q.reason, "new", None]
+                    snap_id, snap_id, q.qualified, q.score, q.tier, q.reason, "new", None,
+                    q.stage, q.lead_score, q.hot]
                  for rec, metro, q, _, _ in inserts],
                 returning=True)
             # Map ids by key rather than trusting result-set order.
@@ -228,6 +235,15 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                    (record_id, source_run_id, event_type, observed_at, changes, queued)
                    VALUES (%s, %s, %s, %s, %s, %s)""", events)
         res.queued = sum(1 for e in events if e[5])
+
+
+def _old_stage(source: Source, srid: str, old: dict) -> str | None:
+    """Stage of the stored version, for rows saved before stages existed."""
+    try:
+        return source.stage(Record(source=source.name, source_record_id=srid,
+                                   source_url="", **{k: old[k] for k in MATERIAL_FIELDS}))
+    except Exception:  # noqa: BLE001 - a label only; never fail the source
+        return None
 
 
 def run(sources: list[Source], *, trigger: str = "manual", conn=None, http=None,

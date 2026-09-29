@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import date
 from typing import Iterable
 
+from .. import stage as stage_mod
 from ..http import Http
 from ..models import MATERIAL_FIELDS, Record, Snapshot
 
@@ -34,6 +36,25 @@ class Source(ABC):
         stored raw row. Keys (all optional): "phone", "people" (owner or
         applicant names), "mailing_address". Never looked up elsewhere."""
         return {}
+
+    # --- Lead score inputs (see qualify.py for the shared points table) ---
+    # Both read only the normalized Record fields, never rec.raw:
+    # `licmon requalify` rebuilds records without their raw rows.
+
+    def stage(self, rec: Record) -> str | None:
+        """Licensing stage (one of stage.STAGES, or None). Override to map
+        this source's own status wording; the default is the shared fallback."""
+        return stage_mod.from_status(rec.status)
+
+    def stage_counts(self, rec: Record, today: date) -> bool:
+        """False when the stage should earn no points (e.g. a license issued
+        long ago is not news). Default: always counts."""
+        return True
+
+    def nightlife_license(self, rec: Record) -> tuple[str, ...]:
+        """Nightlife license signals on this record, as keys of
+        qualify.NIGHTLIFE_LICENSE_POINTS. Default: none."""
+        return ()
 
     @abstractmethod
     def fetch(self, http: Http) -> list[Snapshot]:

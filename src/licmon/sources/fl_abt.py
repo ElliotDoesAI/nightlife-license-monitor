@@ -60,7 +60,9 @@ from __future__ import annotations
 import csv
 import io
 from collections.abc import Iterable
+from datetime import date
 
+from .. import stage
 from ..http import Http
 from ..models import CATEGORIES, Record, Snapshot, parse_date
 from .base import Source
@@ -197,6 +199,9 @@ MODIFIER_DESCRIPTIONS = {
     "DEV": "Destination entertainment venue",
     "EVNT": "Event center",
 }
+
+#: A Florida license counts as a newly licensed lead for this many days.
+LICENSED_FRESH_DAYS = 60
 
 _QUOTA_COP = {"4COP", "5COP", "6COP", "7COP", "8COP"}
 _PACKAGE = {"1APS", "2APS", "3PS", "3APS", "3BPS", "3CPS", "3DPS"}
@@ -343,6 +348,20 @@ class FlAbtSource(Source):
                 "daily-license-status-reporting-data/")
     tracks_removals = True
     min_records = 20000
+
+    def stage(self, rec: Record) -> str | None:
+        return stage.from_status(rec.status)
+
+    def stage_counts(self, rec: Record, today: date) -> bool:
+        # Every row is a license, most of them years old. Only a recent
+        # issue date makes "Licensed" news.
+        return bool(rec.application_date
+                    and (today - rec.application_date).days <= LICENSED_FRESH_DAYS)
+
+    def nightlife_license(self, rec: Record) -> tuple[str, ...]:
+        # Blank-modifier quota liquor license: the classic full-liquor bar.
+        # license_type is "4COP" etc. only when there is no modifier.
+        return ("full_liquor_bar",) if (rec.license_type or "") in _QUOTA_COP else ()
 
     def contact(self, raw: dict) -> dict:
         parts = [_clean(raw.get(f"Mail Address {i}")) for i in (1, 2, 3)]

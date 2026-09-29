@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Iterable
 
+from .. import stage
 from ..http import Http
 from ..models import Record, Snapshot, parse_date
 from . import socrata
@@ -41,6 +42,16 @@ APPLICATION_TYPES = {
 }
 
 
+# license_status values seen in the dataset (probe, 2026-09-29): AAI = issued
+# and active, AAC = cancelled. Every row in the window already carries
+# date_issued, and conditional_approval (Y/N) is set on issued rows too, so
+# a row here is a license that has been issued.
+LICENSED_STATUSES = {"AAI"}
+
+# Nightlife license codes -> qualify.NIGHTLIFE_LICENSE_POINTS keys.
+NIGHTLIFE_CODES = {"1050": "ppa", "1471": "late_hours"}
+
+
 def categorize(code: str | None) -> str:
     return LICENSE_CODES.get((code or "").strip(), "other")
 
@@ -55,6 +66,16 @@ class ChicagoBacpSource(Source):
 
     def __init__(self, today: date | None = None):
         self.today = today
+
+    def stage(self, rec: Record) -> str | None:
+        status = (rec.status or "").strip().upper()
+        if status in LICENSED_STATUSES:
+            return stage.LICENSED
+        return stage.from_status(rec.status)  # AAC (cancelled) -> None
+
+    def nightlife_license(self, rec: Record) -> tuple[str, ...]:
+        key = NIGHTLIFE_CODES.get((rec.license_type or "").strip())
+        return (key,) if key else ()
 
     def fetch(self, http: Http) -> list[Snapshot]:
         since = ((self.today or date.today()) - timedelta(days=WINDOW_DAYS)).isoformat()

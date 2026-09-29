@@ -79,6 +79,10 @@ CREATE TABLE IF NOT EXISTS records (
     reviewed_at         TIMESTAMPTZ,
     UNIQUE (source, source_record_id)
 );
+-- Lead ranking (qualify.py). Added after launch; safe to re-run.
+ALTER TABLE records ADD COLUMN IF NOT EXISTS stage TEXT;        -- Licensed | Approved | In review | Received
+ALTER TABLE records ADD COLUMN IF NOT EXISTS lead_score INTEGER; -- 0 to 100
+ALTER TABLE records ADD COLUMN IF NOT EXISTS hot BOOLEAN;        -- tier A and lead_score >= HOT_MIN_SCORE
 CREATE INDEX IF NOT EXISTS records_queue_idx ON records (qualified, review_status, metro);
 CREATE INDEX IF NOT EXISTS records_venue_idx ON records (venue_key);
 
@@ -123,7 +127,11 @@ SELECT
     r.first_seen_at,
     r.qualify_reason,
     r.review_status,
-    r.review_notes
+    r.review_notes,
+    -- New columns go at the end: CREATE OR REPLACE VIEW can only append.
+    r.stage,
+    r.lead_score,
+    r.hot
 FROM record_events e
 JOIN records r ON r.id = e.record_id
 WHERE e.queued;
@@ -158,6 +166,11 @@ SELECT
          ELSE 'mixed' END AS review_status,
     string_agg(DISTINCT review_notes, ' | ') AS review_notes,
     string_agg(DISTINCT record_id::text, ' ') AS record_ids,
-    venue_key
+    venue_key,
+    (array_agg(stage ORDER BY CASE stage WHEN 'Licensed' THEN 4 WHEN 'Approved' THEN 3
+                                         WHEN 'In review' THEN 2 WHEN 'Received' THEN 1
+                                         ELSE 0 END DESC, record_id))[1] AS stage,
+    max(lead_score) AS lead_score,
+    coalesce(bool_or(hot), false) AS hot
 FROM review_queue
 GROUP BY queue_date, venue_key;

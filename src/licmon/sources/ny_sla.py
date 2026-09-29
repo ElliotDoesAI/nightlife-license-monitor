@@ -6,8 +6,10 @@ list of applications still pending. Pulled statewide once per day.
 
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
+from .. import stage
 from ..http import Http
 from ..models import Record, Snapshot, parse_date
 from . import socrata
@@ -79,6 +81,18 @@ class NySlaSource(Source):
     homepage = f"https://{DOMAIN}/d/{DATASET}"
     tracks_removals = True
     min_records = 200
+
+    def stage(self, rec: Record) -> str | None:
+        status = (rec.status or "").upper().replace(" ", "")
+        if status == "UNDERREVIEW":
+            return stage.IN_REVIEW
+        if status == "INTAKECOMPLETE":
+            return stage.RECEIVED
+        return stage.from_status(rec.status)
+
+    def nightlife_license(self, rec: Record) -> tuple[str, ...]:
+        text = (rec.license_description or "").upper()
+        return ("nightclub_cabaret",) if re.search(r"NIGHT ?CLUB|CABARET", text) else ()
 
     def fetch(self, http: Http) -> list[Snapshot]:
         return socrata.fetch_all(http, DOMAIN, DATASET, order="application_id")

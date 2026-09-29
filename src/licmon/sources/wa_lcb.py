@@ -17,6 +17,7 @@ import html
 import re
 from typing import Iterable
 
+from .. import stage
 from ..http import Http
 from ..models import Record, Snapshot, parse_date
 from .base import Source
@@ -337,6 +338,11 @@ class WaLcbSource(Source):
 
     def fetch(self, http: Http) -> list[Snapshot]:
         return [http.get(URL)]
+
+    def stage(self, rec: Record) -> str | None:
+        # The report section: approved in this report means issued.
+        return {_APPLICATION: stage.RECEIVED, _APPROVED: stage.LICENSED}.get(
+            (rec.status or "").upper())
 
     def contact(self, raw: dict) -> dict:
         people = "; ".join(

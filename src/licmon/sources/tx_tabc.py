@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from .. import stage
 from ..http import Http
 from ..models import Record, Snapshot, clean_id, parse_date
 from . import socrata
@@ -62,6 +63,18 @@ class TxTabcSource(Source):
     homepage = f"https://{DOMAIN}/d/{DATASET}"
     tracks_removals = True
     min_records = 100
+
+    def stage(self, rec: Record) -> str | None:
+        # Dataset holds "Received" and "Pending - In Review" (en dash upstream).
+        status = (rec.status or "").upper()
+        if "REVIEW" in status:
+            return stage.IN_REVIEW
+        if "RECEIVED" in status:
+            return stage.RECEIVED
+        return stage.from_status(rec.status)
+
+    def nightlife_license(self, rec: Record) -> tuple[str, ...]:
+        return ("late_hours",) if (rec.license_type or "").upper() == "LH" else ()
 
     def fetch(self, http: Http) -> list[Snapshot]:
         return socrata.fetch_all(http, DOMAIN, DATASET, order="applicationid")

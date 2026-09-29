@@ -13,13 +13,26 @@ The owner sells event ticketing to venues, so the tier is the kind of venue:
 Coffee shops, bakeries, dessert shops and national chains are dropped.
 Licenses alone rarely tell a bar from a restaurant, so the business name
 does most of the work.
+
+Two numbers per record. ``score`` is the qualification threshold (unchanged
+job: is this a lead at all). ``lead_score`` (0 to 100) ranks leads by
+ticketing fit: venue tier, nightlife license, licensing stage, filing type.
+``hot`` = tier A with a lead_score of at least HOT_MIN_SCORE (default 75).
+Hot is a label on top of A/B/C, not a fourth tier.
+
+Stage and nightlife-license signals come from each source (Source.stage,
+Source.nightlife_license in sources/base.py); the points table below is
+shared by every state.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 
+from . import stage as stage_mod
 from .models import Record
 
 CATEGORY_POINTS = {
@@ -100,6 +113,11 @@ FOOD_BAR = re.compile(
     r"KITCHEN|EATERY|CAFE|PIZZA|PIZZERIA|BISTRO|CUISINE|TAQUERIA)S?,? ?(&|AND|\+)? ?BARS?\b"
     r"|\bBARS? ?(&|AND) ?(GRILL|KITCHEN|RESTAURANT|EATERY|BISTRO)\b")
 
+# Venue names that hold amusement licenses without being nightlife.
+PPA_NOT_NIGHTLIFE = re.compile(
+    r"\b(THEATER|THEATRE|AMPHITHEATER|BOWLING|BOWL|ARCADE|BILLIARDS|POOL HALL|"
+    r"CINEMA|MOVIES?|ESCAPE ROOM|TRAMPOLINE|SKATING|GOLF|MUSEUM|BINGO)\b")
+
 # License descriptions that are a nightclub or a bar by definition.
 NIGHTCLUB_LICENSES = re.compile(r"\bCABARET\b|NIGHTCLUB|NIGHT CLUB")
 BAR_VENUE_LICENSES = re.compile(
@@ -134,6 +152,38 @@ CHAINS = re.compile(
 TIER_BONUS = {"A": 60, "B": 30, "C": 0}
 QUALIFY_MIN = 40
 
+# --- Lead score (0 to 100) ---------------------------------------------------
+
+TIER_POINTS = {"A": 45, "B": 25, "C": 5}
+#: Keys a Source.nightlife_license() may return -> (points, plain label).
+#: The highest one on a record counts.
+NIGHTLIFE_LICENSE_POINTS = {
+    "ppa": (20, "Public place of amusement (Chicago)"),
+    "late_hours": (15, "Late hours (Texas LH, Chicago Late Hour)"),
+    "public_premises": (15, "Public premises bar (California type 48)"),
+    "music_venue": (15, "Music venue (California type 90)"),
+    "nightclub_cabaret": (15, "Night club or cabaret (New York)"),
+    "full_liquor_bar": (10, "Full-liquor bar, no restaurant modifier (Florida COP)"),
+}
+STAGE_POINTS = {stage_mod.LICENSED: 25, stage_mod.APPROVED: 20,
+                stage_mod.IN_REVIEW: 10, stage_mod.RECEIVED: 5}
+#: (pattern on the upper-cased application type, points, label). First wins.
+FILING_POINTS = [
+    (re.compile(r"\b(NEW|ORIGINAL|ISSUE)\b|CHANGE OF LOCATION"), 10, "new or new location"),
+    (re.compile(r"ASSUMPTION|CHANGE OF OWNER|TRANSFER"), 5, "change of owner"),
+]
+#: Pending lists without an application type (CA export) are new filings.
+BLANK_FILING_POINTS = 10
+HOT_MIN_SCORE_DEFAULT = 75
+
+
+def hot_min_score() -> int:
+    """Hot threshold, tunable without a code change (HOT_MIN_SCORE)."""
+    try:
+        return int(os.environ.get("HOT_MIN_SCORE", "").strip() or HOT_MIN_SCORE_DEFAULT)
+    except ValueError:
+        return HOT_MIN_SCORE_DEFAULT
+
 
 def venue_class(names: str, license_description: str | None) -> tuple[str, str]:
     """(tier, reason) from the business names and the license description."""
@@ -165,9 +215,60 @@ class Qualification:
     score: int
     tier: str | None  # "A", "B", "C" or None
     reason: str
+    stage: str | None = None  # one of stage.STAGES, set for every record
+    lead_score: int = 0  # 0 to 100, qualified records only
+    hot: bool = False
 
 
-def qualify(rec: Record, metro: str | None) -> Qualification:
+_REGISTRY: dict | None = None
+
+
+def _source_for(rec: Record, source):
+    """The Source object for a record (None for unknown test sources)."""
+    global _REGISTRY
+    if source is not None:
+        return source
+    if _REGISTRY is None:
+        from .sources import all_sources
+
+        _REGISTRY = {s.name: s for s in all_sources()}
+    return _REGISTRY.get(rec.source)
+
+
+def lead_score(tier: str, license_keys, stage: str | None, stage_counts: bool,
+               application_type: str | None) -> int:
+    """The shared 0 to 100 ranking (see the module docstring)."""
+    points = TIER_POINTS.get(tier, 0)
+    points += max((NIGHTLIFE_LICENSE_POINTS[k][0] for k in license_keys
+                   if k in NIGHTLIFE_LICENSE_POINTS), default=0)
+    if stage_counts:
+        points += STAGE_POINTS.get(stage, 0)
+    app_type = (application_type or "").upper()
+    if not app_type:
+        points += BLANK_FILING_POINTS
+    else:
+        points += next((pts for pat, pts, _ in FILING_POINTS if pat.search(app_type)), 0)
+    return min(points, 100)
+
+
+def qualify(rec: Record, metro: str | None, source=None,
+            today: date | None = None) -> Qualification:
+    """Gate, tier, qualification score, then stage and lead score.
+    `source` defaults to the registered Source named rec.source."""
+    src = _source_for(rec, source)
+    license_keys = src.nightlife_license(rec) if src else ()
+    q = _qualify(rec, metro, license_keys)
+    q.stage = src.stage(rec) if src else stage_mod.from_status(rec.status)
+    if q.qualified:
+        today = today or datetime.now(timezone.utc).date()
+        counts = src.stage_counts(rec, today) if src else True
+        q.lead_score = lead_score(q.tier, license_keys, q.stage, counts,
+                                  rec.application_type)
+        q.hot = q.tier == "A" and q.lead_score >= hot_min_score()
+    return q
+
+
+def _qualify(rec: Record, metro: str | None, license_keys=()) -> Qualification:
     reasons: list[str] = []
     if not metro:
         return Qualification(False, 0, None, "outside target metros")
@@ -191,6 +292,13 @@ def qualify(rec: Record, metro: str | None) -> Qualification:
     if chain:
         return Qualification(False, 0, None, f"national chain ({chain.group(0).lower()})")
     tier, class_reason = venue_class(names, rec.license_description)
+    if (tier == "B" and "ppa" in license_keys
+            and BAR_VENUE_WORDS.search(FOOD_BAR.sub(" ", names))
+            and not PPA_NOT_NIGHTLIFE.search(names)):
+        # A bar or event name holding a public place of amusement license is
+        # a nightlife venue. PPA on an unclear name stays B: bowling alleys
+        # and theaters hold PPAs too.
+        tier, class_reason = "A", class_reason + " with amusement license"
     drop = DROP_WORDS.search(names)
     if drop and tier == "C":
         return Qualification(False, 0, None,

@@ -36,6 +36,7 @@ import html
 import re
 from typing import Iterable
 
+from .. import stage
 from ..http import Http
 from ..models import Record, Snapshot, parse_date
 from .base import Source
@@ -176,6 +177,19 @@ class ChicagoPendingSource(Source):
     homepage = LANDING_URL
     tracks_removals = False  # rolling ~six-week window, not a stable pending list
     min_records = 5
+
+    def stage(self, rec: Record) -> str | None:
+        # Fee paid, on the six-week public notice list: past intake.
+        return stage.IN_REVIEW
+
+    def nightlife_license(self, rec: Record) -> tuple[str, ...]:
+        text = _WS_RE.sub(" ", (rec.license_description or "").upper().replace("-", " "))
+        found = []
+        if "AMUSEMENT" in text:
+            found.append("ppa")
+        if "LATE HOUR" in text:
+            found.append("late_hours")
+        return tuple(found)
 
     def fetch(self, http: Http) -> list[Snapshot]:
         # The two list pages only; no per-row detail requests.

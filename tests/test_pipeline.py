@@ -94,7 +94,10 @@ def test_baseline_then_new_changed_removed(pg):
     with pg.cursor() as cur:
         cur.execute("""SELECT e.changes FROM record_events e JOIN records r ON r.id=e.record_id
                        WHERE r.source_record_id='2' AND e.event_type='changed'""")
-        assert cur.fetchone()[0] == {"status": ["RECEIVED", "PENDING - IN REVIEW"]}
+        assert cur.fetchone()[0] == {"status": ["RECEIVED", "PENDING - IN REVIEW"],
+                                     "stage": ["Received", "In review"]}
+        cur.execute("SELECT stage FROM records WHERE source_record_id='2'")
+        assert cur.fetchone()[0] == "In review"
         cur.execute("SELECT first_seen_at, last_seen_at FROM records WHERE source_record_id='1'")
         first, last = cur.fetchone()
         assert first == DAY1 and last == DAY2
@@ -194,3 +197,32 @@ def test_daily_leads_groups_one_venue(pg):
         cur.execute("SELECT source_record_ids, record_ids FROM daily_leads")
         [(ids, rids)] = cur.fetchall()
         assert ids == "10, 11" and len(rids.split()) == 2
+
+
+def test_stage_score_stored_requalified_and_labelled(pg, monkeypatch):
+    from licmon import cli
+
+    rows = [{"id": "20", "name": "Fake Velvet Lounge LLC", "date": "2026-08-31"},
+            {"id": "21", "name": "Fake Tavern LLC", "date": "2026-08-31"}]
+    src = FakeSource(rows)
+    pipeline.run([src], conn=pg, http=object(), now=DAY1)
+    with pg.cursor() as cur:
+        cur.execute("SELECT source_record_id, stage, lead_score, hot FROM records ORDER BY 1")
+        # lounge: A 45 + Received 5 + original 10; tavern: B 25 + 5 + 10
+        assert cur.fetchall() == [("20", "Received", 60, False), ("21", "Received", 40, False)]
+        # Rows saved before stages existed: requalify fills them in.
+        cur.execute("UPDATE records SET stage=NULL, lead_score=NULL, hot=NULL")
+    pg.commit()
+    class KeepOpen:  # cli closes its connection; the fixture owns this one
+        def __enter__(self):
+            return pg
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(cli.db, "connect", KeepOpen)
+    assert cli.main(["requalify"]) == 0
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM records WHERE stage='Received' AND lead_score > 0")
+        assert cur.fetchone()[0] == 2
+

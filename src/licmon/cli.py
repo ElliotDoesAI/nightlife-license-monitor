@@ -24,14 +24,15 @@ LEAD_COLUMNS = [
     "state", "zip", "county", "license_types", "license_descriptions",
     "application_types", "statuses", "application_date", "event_types",
     "source", "source_record_ids", "source_url", "first_seen_at", "qualify_reason",
-    "review_status", "review_notes", "record_ids",
+    "review_status", "review_notes", "record_ids", "stage", "lead_score", "hot",
 ]
 RECORD_EXPORT_COLUMNS = [
     "queue_date", "event_type", "tier", "score", "legal_name", "dba",
     "source_record_id", "license_type", "license_description", "application_type",
     "status", "application_date", "address", "city", "state", "zip", "county",
     "metro", "source", "source_url", "first_seen_at", "qualify_reason",
-    "review_status", "review_notes", "changes", "record_id",
+    "review_status", "review_notes", "changes", "record_id", "stage", "lead_score",
+    "hot",
 ]
 REVIEW_STATUSES = ("new", "approved", "rejected", "contacted", "snoozed")
 
@@ -240,20 +241,23 @@ def cmd_requalify(args) -> int:
     changed = 0
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT {', '.join(cols)}, qualified, score, tier, qualify_reason, "
-                    "metro, venue_key FROM records")
+                    "metro, venue_key, stage, lead_score, hot FROM records")
         updates = []
+        today = datetime.now(timezone.utc).date()
         for row in cur.fetchall():
             d = dict(zip(cols, row))
             rid = d.pop("id")
             rec = Record(**d)
             metro = assign_metro(rec.state, rec.county, rec.city)
-            q = qualify(rec, metro)
+            q = qualify(rec, metro, today=today)
             vk = venue_key(rec)
-            new = (q.qualified, q.score, q.tier, q.reason, metro, vk)
+            new = (q.qualified, q.score, q.tier, q.reason, metro, vk, q.stage,
+                   q.lead_score, q.hot)
             if new != tuple(row[len(cols):]):
                 updates.append(new + (rid,))
         cur.executemany("UPDATE records SET qualified=%s, score=%s, tier=%s, "
-                        "qualify_reason=%s, metro=%s, venue_key=%s WHERE id=%s", updates)
+                        "qualify_reason=%s, metro=%s, venue_key=%s, stage=%s, "
+                        "lead_score=%s, hot=%s WHERE id=%s", updates)
         changed = len(updates)
         conn.commit()
     print(f"requalified {changed} record(s)")
