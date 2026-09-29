@@ -45,15 +45,13 @@ something. Never ask for a password or connection string in chat.
 7. **First run.** Follow skill `run-now`. Every source should log `ok` and
    the email step `email sent`. Ask Dylan to find the email (check spam
    once).
-8. **Private repo (recommended, ask first).**
-
-   ```bash
-   gh repo edit --visibility private --accept-visibility-change-consequences
-   ```
-
-   Private: logs are no longer public and GitHub's 60-day schedule rule
-   stops applying. The ~2 minute daily job fits in GitHub Free's 2,000
-   private minutes a month.
+8. **Keep the repo public.** On GitHub Free, do not make it private. The
+   workflows read their secrets from the `production` environment, and
+   GitHub Free only allows environments in public repos, so in a private
+   repo the daily run loses its database and email secrets (GitHub Pro or
+   Team lifts this). The `keepalive` job handles GitHub's 60-day schedule
+   rule for public repos. Check with
+   `gh repo view --json visibility -q .visibility` (should say `PUBLIC`).
 9. **Today's leads.** Export to the Desktop and open it:
 
    ```bash

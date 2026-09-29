@@ -213,8 +213,9 @@ It can adjust the rules.
   licenses and arrive a few weeks later than the other states.
 - California data has no filing date, so the date shown is the day the
   scraper first saw the record, at most a day late.
-- The GitHub project is public unless you make it private. Lead data is never
-  stored there, only in your private database. Claude Code will offer to make
-  it private during setup. Saying yes is recommended.
+- The GitHub project stays public. Lead data is never stored there, only in
+  your private database. Keep it public on the free GitHub plan: in a private
+  project on the free plan, GitHub stops giving the daily run its saved
+  passwords, so the run breaks. A paid GitHub plan (Pro or Team) lifts that.
 - The free Neon plan holds a long time of data. If it ever gets close to
   full, the daily run turns red and Claude Code knows what to do.

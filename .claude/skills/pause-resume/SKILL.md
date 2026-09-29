@@ -30,4 +30,5 @@ Notes:
   `gh secret delete LEADS_EMAIL_TO --env production`. Ask the owner first.
 - GitHub disables schedules on public repos after 60 days without commits.
   The workflow's `keepalive` job prevents that. If it happened, resume as
-  above. Making the repo private removes this rule.
+  above. Keep the repo public on GitHub Free: a private repo there loses the
+  `production` environment secrets the workflow needs.

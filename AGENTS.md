@@ -29,7 +29,8 @@ weeks later than the other states.
 
 ## Hard rules
 
-1. **This repo is public (unless the owner made it private).** Never commit,
+1. **This repo is public, and stays public on GitHub Free** (see handover
+   step 5). Never commit,
    print in a workflow, or upload as an artifact any lead data: names,
    addresses, phone numbers, spreadsheet exports, email previews, database dumps,
    `.env*` files or connection strings. Workflow logs must stay counts-only.
@@ -161,11 +162,12 @@ Follow skill `handover-checklist`. In short:
 3. Set up the daily email (skill `email-setup`).
 4. Run it once (see "Run it now") and confirm every source says `ok` and the
    email arrived.
-5. Optional, recommended: make the repo private
-   (`gh repo edit --visibility private --accept-visibility-change-consequences`).
-   A ~2 minute daily job fits easily in GitHub Free's 2,000 private minutes a
-   month, the 60-day schedule rule no longer applies, and run logs stop being
-   public.
+5. Keep the repo public on GitHub Free. The workflows read their secrets
+   from the `production` environment, and GitHub Free only allows
+   environments in public repos: in a private repo those secrets stop
+   working unless the account is on GitHub Pro or Team. The `keepalive` job
+   handles the 60-day schedule rule for public repos. Hard rule 1 keeps the
+   public logs free of lead data.
 
 ## Developing
 
