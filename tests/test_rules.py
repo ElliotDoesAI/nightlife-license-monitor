@@ -80,3 +80,11 @@ def test_unclassified_license_needs_name_signal():
     named = rec(category="other", application_type="ASSUMPTION", dba="Fake Taproom")
     q = qualify(named, "Seattle-Tacoma-Bellevue")
     assert q.qualified and q.tier == "C" and "not classified" in q.reason
+
+
+def test_positive_words_are_specific():
+    assert not qualify(rec(category="other", application_type="NEW",
+                           dba="Fake Country Club"), "Houston").qualified
+    assert not qualify(rec(category="other", application_type="NEW",
+                           dba="Fake Dance Studio"), "Houston").qualified
+    assert "comedy club" in qualify(rec(dba="Fake Comedy Club"), "Houston").reason

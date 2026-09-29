@@ -22,6 +22,8 @@ log = logging.getLogger("licmon")
 
 # On a source's first run everything is "new"; only records whose application
 # date is this recent go into the queue, the rest become a silent baseline.
+# Sources without application dates (CA export) queue nothing on the first
+# run; their genuinely new applications queue from the second run on.
 BASELINE_RECENT_DAYS = int(os.environ.get("LICMON_BASELINE_RECENT_DAYS", "14"))
 
 
@@ -39,6 +41,7 @@ class SourceResult:
     removed: int = 0
     queued: int = 0
     baseline: bool = False
+    duplicates: int = 0
     seconds: float = 0.0
     error_type: str | None = None
     safe_error: str | None = None  # safe for public logs
@@ -86,9 +89,13 @@ def run_source(conn: psycopg.Connection, source: Source, http: Http, run_id: int
                         (snap_ids, sr_id))
         conn.commit()
 
+        # Keep the first row per id on purpose; count repeats so they are visible.
         records: dict[str, Record] = {}
         for rec in source.parse(snapshots):
-            records.setdefault(rec.source_record_id, rec)
+            if rec.source_record_id in records:
+                res.duplicates += 1
+            else:
+                records[rec.source_record_id] = rec
         res.fetched = len(records)
         if res.fetched < source.min_records:
             raise SourceSanityError(
@@ -189,20 +196,22 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                     first_seen_at, last_seen_at, last_changed_at, first_snapshot_id,
                     last_snapshot_id, qualified, score, tier, qualify_reason,
                     review_status, review_notes)
-                    VALUES ({placeholders}) RETURNING id""",
+                    VALUES ({placeholders}) RETURNING source_record_id, id""",
                 [[rec.source, rec.source_record_id] + _values(rec)
                  + [metro, venue_key(rec), rec.material_hash(mfields), db.jsonb(rec.raw),
                     now, now, now,
                     snap_id, snap_id, q.qualified, q.score, q.tier, q.reason, "new", None]
                  for rec, metro, q, _, _ in inserts],
                 returning=True)
-            ids = []
+            # Map ids by key rather than trusting result-set order.
+            ids = {}
             while True:
-                ids.append(cur.fetchone()[0])
+                srid_, rid_ = cur.fetchone()
+                ids[srid_] = rid_
                 if not cur.nextset():
                     break
-            for rid, (_, _, _, etype, queued) in zip(ids, inserts):
-                events.append((rid, sr_id, etype, now, None, queued))
+            for rec, _, _, etype, queued in inserts:
+                events.append((ids[rec.source_record_id], sr_id, etype, now, None, queued))
 
         if source.tracks_removals:
             gone = [o["id"] for srid, o in existing.items()
@@ -258,8 +267,8 @@ def log_result(res: SourceResult) -> None:
     """Counts only. Never log record contents: Actions logs are public."""
     if res.status == "success":
         log.info("source %s: ok in %ss fetched=%d new=%d changed=%d removed=%d "
-                 "queued=%d%s", res.source, res.seconds, res.fetched, res.new,
-                 res.changed, res.removed, res.queued,
+                 "queued=%d dup_ids=%d%s", res.source, res.seconds, res.fetched, res.new,
+                 res.changed, res.removed, res.queued, res.duplicates,
                  " (baseline run)" if res.baseline else "")
     else:
         log.error("source %s: FAILED in %ss (%s)%s", res.source, res.seconds,

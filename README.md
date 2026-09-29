@@ -16,6 +16,7 @@ per source, never names or addresses.
 |---|---|---|
 | `ny_sla_pending` | NY SLA "Current SLA Pending Licenses", data.ny.gov `f8i8-k2gm` | full pending list, statewide |
 | `tx_tabc_pending` | TABC "Pending Original ... Application(s)", data.texas.gov `mxm5-tdpj` | full pending list, statewide |
+| `chicago_bacp_pending` | Chicago BACP "Liquor and Public Place of Amusement Applications" notice lists (liquor + amusement pages) | rolling ~6 weeks, earliest Chicago signal |
 | `chicago_bacp_liquor` | Chicago "Business Licenses", data.cityofchicago.org `r5kz-chrr`, liquor/amusement codes, non-renewals | rolling 180 days |
 | `wa_lcb_actions` | WSLCB "New License Applications, Approvals and Discontinuances", statewide report | rolling 30 days |
 | `ca_abc_applications` | CA ABC Daily Data Export (CSV zip), application rows only | full list, statewide |
