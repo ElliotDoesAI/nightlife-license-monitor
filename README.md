@@ -48,7 +48,10 @@ point at ABC's public license lookup page for a human to open.
    marking everything removed.
 5. `qualify.py` applies deterministic rules: target metro, license category,
    application type (new / relocation / ownership change beat renewals),
-   name keywords, exclusion words. Each lead gets a score, tier A/B/C and a
+   name keywords, exclusion words. The tier is the venue kind for a ticketing
+   seller: A nightclubs/lounges, B obvious bars and event venues, C
+   restaurants; cafes, bakeries and chains are dropped. Each lead gets a
+   score, tier A/B/C and a
    plain reason.
 6. Qualified new or changed records are queued. A source's very first run is a
    silent baseline except for applications dated in the last 14 days.

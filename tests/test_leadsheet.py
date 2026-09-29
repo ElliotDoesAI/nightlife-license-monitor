@@ -56,7 +56,7 @@ def test_group_merges_venue_and_cleans_fields():
     top = rows[0]
     assert top["priority"] == "A"
     assert top["company"] == "Zebra Fake LLC"
-    assert top["business_type"] == "Bar / nightclub / lounge"
+    assert top["business_type"] == "Nightclub / lounge"
     assert top["filing"] == "New application"
     assert top["status"] == "Pending"
     assert top["filed_on"] == date(2026, 9, 18)

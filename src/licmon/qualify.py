@@ -2,6 +2,17 @@
 
 Rules, not AI, decide. Every decision carries a human-readable reason so the
 operator can see why a record is (or is not) in the queue.
+
+The owner sells event ticketing to venues, so the tier is the kind of venue:
+
+  A  nightclub: club / lounge / cabaret / dance names, cabaret licenses
+  B  obvious bar or event venue: tavern, pub, taproom, rooftop, karaoke,
+     comedy, live music, event center, bar-only licenses (no food required)
+  C  everything else that qualifies, mostly restaurants
+
+Coffee shops, bakeries, dessert shops and national chains are dropped.
+Licenses alone rarely tell a bar from a restaurant, so the business name
+does most of the work.
 """
 
 from __future__ import annotations
@@ -60,9 +71,92 @@ EXCLUDE_WORDS = re.compile(
     r"MILITARY|ARMY|NAVY|AIR FORCE|NAVAL|VETERANS OF FOREIGN WARS|VFW|"
     r"AMERICAN LEGION|CHURCH|PARISH|SCHOOL|HIGH SCHOOL)\b")
 
-TIER_A = 70
-TIER_B = 55
+# --- Venue class (decides the tier) ---------------------------------------
+
+# Nightclub names (tier A).
+NIGHTCLUB_WORDS = re.compile(
+    r"\b(NIGHT ?CLUBS?|NIGHTLIFE|ULTRA ?LOUNGE|LOUNGE|CABARET|DISCO|DISCOTHEQUE|"
+    r"DANCE CLUB|DANCE HALL|DANCEHALL|GENTLEMEN'?S CLUB|HOOKAH|AFTER ?HOURS|"
+    r"DAY ?CLUB|BEACH CLUB)\b")
+# "Lounge" that is not a nightlife lounge.
+NOT_NIGHTCLUB = re.compile(
+    r"\b(COFFEE|CAFE|TEA|CIGAR|NAIL|HAIR|BEAUTY|LASH|BROW|SPA|AIRPORT|ESPRESSO|"
+    r"DESSERT|JUICE|MASSAGE) LOUNGE\b")
+
+# Obvious bars and event venues (tier B).
+BAR_VENUE_WORDS = re.compile(
+    r"\b(BAR|BARS|TAVERN|PUB|SALOON|COCKTAILS?|ROOFTOP|SPEAKEASY|CANTINA|"
+    r"TAPROOM|TAP ROOM|TAP HOUSE|TAPHOUSE|BREWERY|BREWING|BREWPUB|GASTROPUB|"
+    r"BEER GARDEN|BIERGARTEN|BEER HALL|WINE BAR|DISTILLERY|ICEHOUSE|ICE HOUSE|"
+    r"KARAOKE|LIVE MUSIC|MUSIC HALL|MUSIC VENUE|CONCERTS?|COMEDY|THEATER|THEATRE|"
+    r"AMPHITHEATER|EVENT CENTER|EVENT SPACE|EVENT HALL|EVENTS|VENUE|BALLROOM|"
+    r"BOWLING|ARCADE|BILLIARDS|POOL HALL|SOCIAL CLUB|SUPPER CLUB|SPORTS BAR|"
+    r"ENTERTAINMENT|JAZZ|HONKY ?TONK|WHISKEY|WHISKY|TEQUILA|MEZCAL)\b")
+# "Bar" that is really food or a service (sushi bar, bar & grill, nail bar).
+FOOD_BAR = re.compile(
+    r"\b(SUSHI|OYSTER|RAW|JUICE|SALAD|ESPRESSO|COFFEE|NOODLE|TACO|POKE|RAMEN|"
+    r"NAIL|BLOW ?DRY|BROW|LASH|SMOOTHIE|DESSERT|YOGURT|CEREAL|OXYGEN|CANDY|"
+    r"MILK|TEA|PHO|DUMPLING|BURGER|WING|SNACK|HOT ?POT|KBBQ|BBQ|GRILL|RESTAURANT|"
+    r"KITCHEN|EATERY|CAFE|PIZZA|PIZZERIA|BISTRO|CUISINE|TAQUERIA)S?,? ?(&|AND|\+)? ?BARS?\b"
+    r"|\bBARS? ?(&|AND) ?(GRILL|KITCHEN|RESTAURANT|EATERY|BISTRO)\b")
+
+# License descriptions that are a nightclub or a bar by definition.
+NIGHTCLUB_LICENSES = re.compile(r"\bCABARET\b|NIGHTCLUB|NIGHT CLUB")
+BAR_VENUE_LICENSES = re.compile(
+    r"PUBLIC PREMISES|MUSIC VENUE|\bTAVERN\b|PUBLIC PLACE OF AMUSEMENT|"
+    r"PERFORMING ARTS|BOWLING|CIVIC CENTER|^ON-SALE BEER$",
+    re.I)
+
+# Restaurant names: a bar-type license alone does not make these a bar.
+RESTAURANT_WORDS = re.compile(
+    r"\b(RESTAURANTE?S?|GRILL|KITCHEN|EATERY|BISTRO|STEAK ?HOUSE|SMOKEHOUSE|BBQ|"
+    r"BARBECUE|SUSHI|RAMEN|PIZZA|PIZZERIA|TAQUERIA|TACOS?|MARISCOS|CUISINE|DINER|"
+    r"TRATTORIA|OSTERIA|IZAKAYA|NOODLES?|BURGERS?|WINGS?|CHICKEN|SEAFOOD|CRAB|"
+    r"FOODS?|EMPANADAS?|EMPANADAZO)\b")
+
+# Not a ticketing lead even with an on-premises license.
+DROP_WORDS = re.compile(
+    r"\b(COFFEE|CAFE|CAF\u00c9|ESPRESSO|BAKERY|BAKE SHOP|BAKESHOP|PATISSERIE|"
+    r"PASTRY|PASTRIES|DONUTS?|DOUGHNUTS?|BAGELS?|TEA HOUSE|TEAHOUSE|TEA ROOM|"
+    r"BOBA|BUBBLE TEA|JUICE|SMOOTHIES?|CREAMERY|ICE CREAM|GELATO|FROZEN YOGURT|"
+    r"FROYO|DESSERTS?|CREPES?|CUPCAKES?|CHOCOLATES?|BREAKFAST|PANCAKES?|WAFFLES?|"
+    r"SANDWICH(ES)?|DELI|BUFFET|FOOD TRUCK|DAYCARE|SALON|SPA|NAILS?)\b")
+CHAINS = re.compile(
+    r"\b(APPLEBEE'?S|CHILI'?S|OLIVE GARDEN|RED LOBSTER|OUTBACK|TEXAS ROADHOUSE|"
+    r"CHEESECAKE FACTORY|BJ'?S RESTAURANT|BUFFALO WILD WINGS|HOOTERS|TWIN PEAKS|"
+    r"TGI ?FRIDAY'?S|RED ROBIN|DENNY'?S|IHOP|CRACKER BARREL|LONGHORN STEAKHOUSE|"
+    r"CHUY'?S|PAPPADEAUX|PAPPASITO'?S|PAPPAS|TORCHY'?S|STARBUCKS|DUNKIN|PANERA|"
+    r"CHIPOTLE|TACO BELL|MCDONALD'?S|WHATABURGER|P\.? ?F\.? CHANG'?S|CARRABBA'?S|"
+    r"BONEFISH|RUTH'?S CHRIS|MORTON'?S|FOGO DE CHAO|YARD HOUSE|MAGGIANO'?S|"
+    r"FIRST WATCH|HOUSE OF PIES|CHUCK E\.? CHEESE|PEI WEI|SHAKE SHACK|"
+    r"CAVA|SWEETGREEN|WINGSTOP|PIZZA HUT|DOMINO'?S|PAPA JOHN'?S|CICI'?S)\b")
+
+TIER_BONUS = {"A": 60, "B": 30, "C": 0}
 QUALIFY_MIN = 40
+
+
+def venue_class(names: str, license_description: str | None) -> tuple[str, str]:
+    """(tier, reason) from the business names and the license description."""
+    lic = (license_description or "").upper()
+    club = NIGHTCLUB_WORDS.search(names)
+    if club and not NOT_NIGHTCLUB.search(names):
+        if DROP_WORDS.search(names):  # "K-Cafe & Lounge": a cafe with a lounge
+            return "B", f"lounge name ({club.group(0).lower()})"
+        return "A", f"nightclub name ({club.group(0).lower()})"
+    lic_club = NIGHTCLUB_LICENSES.search(lic)
+    if lic_club:
+        return "A", f"nightclub license ({lic_club.group(0).lower()})"
+    bar_names = FOOD_BAR.sub(" ", names)
+    bar = BAR_VENUE_WORDS.search(bar_names)
+    if bar:
+        return "B", f"bar or venue name ({bar.group(0).lower()})"
+    if RESTAURANT_WORDS.search(names) or DROP_WORDS.search(names):
+        return "C", "restaurant or other (no bar or club signal)"
+    for part in re.split(r"[,;]", lic):
+        lic_bar = BAR_VENUE_LICENSES.search(part.strip())
+        if lic_bar:
+            return "B", f"bar or venue license ({part.strip().lower()})"
+    return "C", "restaurant or other (no bar or club signal)"
 
 
 @dataclass
@@ -92,6 +186,15 @@ def qualify(rec: Record, metro: str | None) -> Qualification:
     good = POSITIVE_WORDS.search(names)
     if bad and not good:
         return Qualification(False, 0, None, f"non-target business name ({bad.group(0).lower()})")
+    chain = next((m for m in (CHAINS.match(n.strip().upper().removeprefix("THE "))
+                              for n in (rec.dba, rec.legal_name) if n) if m), None)
+    if chain:
+        return Qualification(False, 0, None, f"national chain ({chain.group(0).lower()})")
+    tier, class_reason = venue_class(names, rec.license_description)
+    drop = DROP_WORDS.search(names)
+    if drop and tier == "C":
+        return Qualification(False, 0, None,
+                             f"not a nightlife venue ({drop.group(0).lower()})")
 
     score = CATEGORY_POINTS.get(rec.category, 0)
     if rec.category == "other":
@@ -122,7 +225,10 @@ def qualify(rec: Record, metro: str | None) -> Qualification:
         reasons.append(f"name also matches exclusion ({bad.group(0).lower()})")
 
     reasons.insert(0, metro)
-    if score < QUALIFY_MIN:
+    if score < QUALIFY_MIN and tier == "C":
         return Qualification(False, score, None, "; ".join(reasons + ["score below threshold"]))
-    tier = "A" if score >= TIER_A else "B" if score >= TIER_B else "C"
-    return Qualification(True, score, tier, "; ".join(reasons))
+    if score < QUALIFY_MIN - 15:
+        # A/B names still need some license or filing signal.
+        return Qualification(False, score, None, "; ".join(reasons + ["score below threshold"]))
+    reasons.insert(1, class_reason)
+    return Qualification(True, score + TIER_BONUS[tier], tier, "; ".join(reasons))

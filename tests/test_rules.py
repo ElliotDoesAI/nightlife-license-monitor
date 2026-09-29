@@ -79,7 +79,7 @@ def test_unclassified_license_needs_name_signal():
     assert not qualify(plain, "Seattle-Tacoma-Bellevue").qualified
     named = rec(category="other", application_type="ASSUMPTION", dba="Fake Taproom")
     q = qualify(named, "Seattle-Tacoma-Bellevue")
-    assert q.qualified and q.tier == "C" and "not classified" in q.reason
+    assert q.qualified and q.tier == "B" and "not classified" in q.reason
 
 
 def test_positive_words_are_specific():
@@ -88,3 +88,45 @@ def test_positive_words_are_specific():
     assert not qualify(rec(category="other", application_type="NEW",
                            dba="Fake Dance Studio"), "Houston").qualified
     assert "comedy club" in qualify(rec(dba="Fake Comedy Club"), "Houston").reason
+
+
+def tier(dba, **kw):
+    q = qualify(rec(dba=dba, **kw), "Houston")
+    return q.tier if q.qualified else None
+
+
+def test_tiers_follow_ticketing_fit():
+    # A: nightclubs
+    assert tier("Fake Nightclub") == "A"
+    assert tier("Velvet Fake Ultra Lounge") == "A"
+    assert tier("Fake Hookah Lounge") == "A"
+    assert tier("Fake Restaurant & Lounge") == "A"
+    assert tier("Fake Holdings", license_description="Cabaret") == "A"
+    # B: obvious bars and event venues
+    assert tier("Fake Tavern") == "B"
+    assert tier("Fake Irish Pub") == "B"
+    assert tier("Fake Brewing Co") == "B"
+    assert tier("Fake Comedy House") == "B"
+    assert tier("Fake Event Center") == "B"
+    assert tier("Fake Pizza and Sports Bar") == "B"
+    assert tier("Fake Holdings", license_description="On-Sale General - Public Premises") == "B"
+    assert tier("Fake K-Cafe & Lounge") == "B"
+    # C: restaurants, even with a bar-sounding add-on or license
+    assert tier("Casa Fake Mexican Restaurant") == "C"
+    assert tier("Fake Sushi Bar") == "C"
+    assert tier("Fake Bar & Grill") == "C"
+    assert tier("Fake Burgers and Bar") == "C"
+    assert tier("Fake Restaurant & Bar") == "C"
+    assert tier("Fake Grill", license_description="Public Place of Amusement") == "C"
+    assert tier("Fake Poke Bowl") == "C"
+    # dropped: cafes, bakeries, dessert, chains
+    assert tier("Fake Coffee Co") is None
+    assert tier("The Fake Cafe") is None
+    assert tier("Fake Bakery") is None
+    assert tier("Fake Ice Cream") is None
+    assert tier("Chipotle Mexican Grill #1") is None
+    assert tier("Red Robin Gourmet Burgers & Brews") is None
+    # a local name that contains a chain's name is kept
+    assert tier("Don Fakey Chuy's Tacos") == "C"
+    # a cafe that is also clearly a bar stays
+    assert tier("Fake Coffee & Cocktail Bar") == "B"

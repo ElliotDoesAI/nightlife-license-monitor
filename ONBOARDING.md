@@ -97,8 +97,11 @@ For example:
 - "Pause the scraper." / "Turn it back on."
 - "Send the daily email to my partner too."
 
-Priority: **A** is the strongest nightlife signal, **B** is good, **C** is
-weaker. Start with the A rows (green).
+Priority: **A** is nightclubs and lounges. **B** is obvious bars and event
+venues, like taverns, pubs, taprooms, comedy clubs and event centers. **C** is
+restaurants. Coffee shops, bakeries and big chains are left out. Start with
+the A rows (green). If a lead is in the wrong tier, tell Claude Code; it can
+adjust the rules.
 
 ## Good to know
 

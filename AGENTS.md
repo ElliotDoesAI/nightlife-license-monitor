@@ -78,8 +78,12 @@ export DATABASE_URL="$(neon cs production --project-id tiny-truth-43995411 --ssl
 | "Only show Houston / only tier A" | Export, then filter the file (skill `export-leads`), or query the `daily_leads` view with SQL (`review_queue` is one row per application). |
 | "Change who gets the email" | Ask first, then `gh secret set LEADS_EMAIL_TO --env production` (comma-separated addresses, typed at the prompt, not echoed). |
 
-Priority (tier): **A** = strongest nightlife signal, **B** = good, **C** =
-weaker. Scoring lives in
+The owner sells event ticketing (Speakeasy), so the tier is the kind of venue:
+**A** = nightclubs and lounges, **B** = obvious bars and event venues (tavern,
+pub, taproom, brewery, comedy, live music, event center), **C** = restaurants.
+Coffee shops, bakeries, dessert shops and national chains are dropped. The
+business name decides most of it, because licenses rarely tell a bar from a
+restaurant. Rules live in
 `src/licmon/qualify.py`; target metros in `src/licmon/metros.py`.
 
 ## The daily email

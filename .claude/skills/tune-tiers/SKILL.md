@@ -7,10 +7,16 @@ description: Change which filings count as leads, the scoring and tiers, keyword
 
 Rules are deterministic and live in two files:
 
-- `src/licmon/qualify.py`: points per license category, application type
-  (new, relocation, ownership change beat renewals), name keywords (bar,
-  lounge, pub...), exclusion words (market, gas, liquor store...), hard
-  exclusions, and tier cut-offs (A >= 70, B 55-69, C 40-54, under 40 dropped).
+- `src/licmon/qualify.py`: whether a filing qualifies (target metro, license
+  category points, application type, store/gas exclusion words, routine
+  renewals) and which tier it gets. The owner sells event ticketing, so the
+  tier is the venue kind, mostly from the business name:
+  `NIGHTCLUB_WORDS` / `NIGHTCLUB_LICENSES` = A (nightclubs, lounges);
+  `BAR_VENUE_WORDS` / `BAR_VENUE_LICENSES` = B (bars, event venues);
+  everything else = C (restaurants). `FOOD_BAR` and `RESTAURANT_WORDS` stop
+  "sushi bar" or "bar & grill" from counting as bars. `DROP_WORDS` (coffee,
+  bakery, dessert...) and `CHAINS` (national chains, matched at the start of
+  the name) remove a lead. Add a word to the right list to move leads.
 - `src/licmon/metros.py`: which counties (or cities) make up each metro.
 
 Steps:

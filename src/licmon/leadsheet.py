@@ -41,9 +41,10 @@ COLUMNS: list[tuple[str, str, int]] = [
 ]
 HEADERS = [h for _, h, _ in COLUMNS]
 
+# Tier A/B mean nightclub / bar-or-venue (see qualify.py); C is by license.
 BUSINESS_TYPES = {
-    "nightlife": "Bar / nightclub / lounge",
-    "on_premise": "Restaurant / bar",
+    "nightlife": "Restaurant / bar",
+    "on_premise": "Restaurant",
     "hospitality_mfg": "Brewery / taproom / winery",
     "catering_event": "Caterer / event venue",
     "hotel": "Hotel",
@@ -59,6 +60,15 @@ _FILINGS = [
     (r"TRADENAME|TRADE NAME|NAME CHANGE", "Name change"),
     (r"CLASS|IN LIEU|UPGRADE|ADDED PRIVILEGE", "License upgrade"),
 ]
+
+
+def _business_type(priority: str, cats: list) -> str:
+    if priority == "A":
+        return "Nightclub / lounge"
+    if priority == "B":
+        return ("Brewery / taproom" if cats and cats[0] == "hospitality_mfg"
+                else "Bar / event venue")
+    return BUSINESS_TYPES.get(cats[0], "Other") if cats else "Other"
 
 
 def _filing(app_types: list[str], source: str) -> str:
@@ -135,7 +145,8 @@ SELECT q.queue_date, q.record_id, q.venue_key, q.tier, q.score, q.legal_name,
        q.application_date, q.address, q.city, q.state, q.zip, q.metro,
        q.source, q.source_url, r.category, r.raw
 FROM review_queue q JOIN records r ON r.id = q.record_id
-WHERE (%(day)s::date IS NULL OR q.queue_date = %(day)s)
+WHERE r.qualified
+  AND (%(day)s::date IS NULL OR q.queue_date = %(day)s)
   AND (NOT %(open)s OR q.review_status = 'new')
 ORDER BY q.queue_date DESC, q.score DESC, q.record_id
 """
@@ -187,7 +198,7 @@ def group_records(records: list[dict]) -> list[dict]:
             "score": top.get("score") or 0,
             "business_name": _title(name),
             "company": _title(company) or None,
-            "business_type": BUSINESS_TYPES.get(cats[0], "Other") if cats else "Other",
+            "business_type": _business_type(min((r.get("tier") or "C") for r in recs), cats),
             "filing": _filing(_uniq(r.get("application_type") for r in recs), top["source"]),
             "status": _status(_uniq(r.get("status") for r in recs), top["source"]),
             "filed_on": min(dates) if dates else None,

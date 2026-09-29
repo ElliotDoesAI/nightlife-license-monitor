@@ -151,7 +151,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     if total == 0:
         subject = f"Nightlife leads for {label}: no new leads"
     else:
-        subject = f"Nightlife leads for {label}: {total} new ({count_a} top priority)"
+        subject = f"Nightlife leads for {label}: {total} new ({count_a} nightclubs)"
     if failed == 1:
         subject += " (1 source needs attention)"
     elif failed > 1:
@@ -167,9 +167,9 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
         text_lines = [
             f"{total} new nightlife leads today. They are in the attached spreadsheet.",
             "",
-            f"Top priority (A): {count_a}",
-            f"Good (B): {count_b}",
-            f"Worth a look (C): {count_c}",
+            f"Nightclubs (A): {count_a}",
+            f"Bars and event venues (B): {count_b}",
+            f"Restaurants (C): {count_c}",
             "",
             f"By market: {market_text}",
             "",
@@ -187,9 +187,9 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
         h.append(f"<p>{e('No new leads today.')}</p>")
     else:
         h.append(f"<p>{e(text_lines[0])}</p>")
-        h.append(f"<p>{e(f'Top priority (A): {count_a}')}<br>"
-                 f"{e(f'Good (B): {count_b}')}<br>"
-                 f"{e(f'Worth a look (C): {count_c}')}</p>")
+        h.append(f"<p>{e(f'Nightclubs (A): {count_a}')}<br>"
+                 f"{e(f'Bars and event venues (B): {count_b}')}<br>"
+                 f"{e(f'Restaurants (C): {count_c}')}</p>")
         h.append(f"<p>{e(f'By market: {market_text}')}</p>")
     h.append(f"<p>{e(source_line)}</p>")
     h.append(f"<p>{e(FOOTER)}</p>")
