@@ -127,9 +127,11 @@ def cmd_export(args) -> int:
     if not full:
         with db.connect() as conn:
             rows = leadsheet.load_rows(conn, day, args.open)
+            open_rows = leadsheet.load_rows(conn, None, True) if xlsx else []
         if xlsx:
+            # Tabs: New (the rows asked for), All open, one per state, legend.
             with open(args.out, "wb") as fh:
-                fh.write(leadsheet.build_xlsx(rows, title=f"Leads {day}" if day else "Leads"))
+                fh.write(leadsheet.build_workbook(rows, open_rows))
         else:
             out = open(args.out, "w", newline="", encoding="utf-8") if args.out else sys.stdout
             try:

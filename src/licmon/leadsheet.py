@@ -5,6 +5,10 @@ themselves publish (see Source.contact). No automatic outside lookups: the
 Map, Google and Instagram columns are plain search links the owner clicks by
 hand to find a phone number, website or social account.
 
+The workbook (build_workbook) has a New tab, an All open tab, one tab per
+state that has open leads, and a How scoring works tab. Every tab sorts by
+lead score, highest first.
+
 Local and email use only. Never print rows in GitHub Actions (public logs).
 """
 
@@ -16,16 +20,21 @@ import re
 from datetime import date, datetime
 from urllib.parse import quote_plus
 
+from . import stage as stage_mod
+
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 #: (key, header, excel width). Order is the column order.
 COLUMNS: list[tuple[str, str, int]] = [
     ("priority", "Priority", 9),
+    ("hot", "Hot", 7),
+    ("lead_score", "Score", 8),
     ("business_name", "Business name", 34),
+    ("whats_new", "What's new", 16),
     ("company", "Company / owner", 34),
     ("business_type", "Business type", 26),
     ("filing", "Filing", 18),
-    ("status", "Status", 12),
+    ("stage", "Stage", 11),
     ("filed_on", "Filed on", 12),
     ("phone", "Phone", 16),
     ("people", "Owner / applicant names", 34),
@@ -43,6 +52,13 @@ COLUMNS: list[tuple[str, str, int]] = [
     ("lead_ids", "Lead ID", 12),
 ]
 HEADERS = [h for _, h, _ in COLUMNS]
+#: All open and state tabs span many days: the queue date replaces What's new.
+OPEN_COLUMNS = [("queue_date", "Queued on", 12) if key == "whats_new" else (key, h, w)
+                for key, h, w in COLUMNS]
+
+NEW_FILING = "New filing"
+STAGE_ADVANCED = "Stage advanced"
+DETAILS_CHANGED = "Details changed"
 
 # Tier A/B mean nightclub / bar-or-venue (see qualify.py); C is by license.
 BUSINESS_TYPES = {
@@ -93,19 +109,40 @@ def _filing(app_types: list[str], source: str) -> str:
     return ", ".join(labels)
 
 
-def _status(statuses: list[str], source: str) -> str:
-    up = " ".join(statuses).upper()
-    if source == "fl_abt_licenses":
-        return "Licensed"
-    if "APPROV" in up:
-        return "Approved"
-    if re.search(r"\bPEND|APPLICATION|INTAKE|REVIEW|RECEIVED|NOTICE|APPLICANT", up):
-        return "Pending"
-    if re.search(r"SUREND|SURREND", up):
-        return "Surrendered"
-    if re.search(r"\bACTIVE|CURRENT|ISSUED", up):
-        return "Licensed"
-    return statuses[0].title() if statuses else ""
+def _stage(recs: list[dict], sources: dict) -> str:
+    """Most advanced stage across a venue's records. Uses the stored stage,
+    or the source's mapping for rows stored before stages existed."""
+    found = []
+    for rec in recs:
+        value = rec.get("stage")
+        if value is None:
+            src = sources.get(rec.get("source"))
+            value = (_source_stage(src, rec) if src
+                     else stage_mod.from_status(rec.get("status")))
+        found.append(value)
+    return stage_mod.best(found) or ""
+
+
+def _source_stage(src, rec: dict) -> str | None:
+    from .models import Record
+
+    try:
+        return src.stage(Record(source=rec.get("source") or "", source_record_id="",
+                                source_url="", status=rec.get("status"),
+                                license_type=rec.get("license_type")))
+    except Exception:  # noqa: BLE001 - a label only
+        return None
+
+
+def _whats_new(recs: list[dict]) -> str:
+    """New filing > Stage advanced > Details changed, from the queue events."""
+    types = {r.get("event_type") for r in recs}
+    if types & {"new", "baseline"}:
+        return NEW_FILING
+    if any(r.get("event_type") == "changed" and "stage" in (r.get("changes") or {})
+           for r in recs):
+        return STAGE_ADVANCED
+    return DETAILS_CHANGED if "changed" in types else ""
 
 
 def _phone(value: str | None) -> str | None:
@@ -153,7 +190,9 @@ _SQL = """
 SELECT q.queue_date, q.record_id, q.venue_key, q.tier, q.score, q.legal_name,
        q.dba, q.license_description, q.application_type, q.status,
        q.application_date, q.address, q.city, q.state, q.zip, q.metro,
-       q.source, q.source_url, r.category, r.raw
+       q.source, q.source_url, r.category, r.raw, q.event_type, q.changes,
+       q.review_status, q.stage, q.lead_score, q.hot, q.license_type,
+       q.first_seen_at
 FROM review_queue q JOIN records r ON r.id = q.record_id
 WHERE r.qualified
   AND (%(day)s::date IS NULL OR q.queue_date = %(day)s)
@@ -163,7 +202,8 @@ ORDER BY q.queue_date DESC, q.score DESC, q.record_id
 _FIELDS = ["queue_date", "record_id", "venue_key", "tier", "score", "legal_name", "dba",
            "license_description", "application_type", "status", "application_date",
            "address", "city", "state", "zip", "metro", "source", "source_url",
-           "category", "raw"]
+           "category", "raw", "event_type", "changes", "review_status", "stage",
+           "lead_score", "hot", "license_type", "first_seen_at"]
 
 
 def load_rows(conn, day: date | None, open_only: bool = False) -> list[dict]:
@@ -203,15 +243,21 @@ def group_records(records: list[dict]) -> list[dict]:
                                         top.get("state"), top.get("zip")) if p)
         map_q = " ".join(p for p in (name, address) if p)
         web_q = " ".join(p for p in (name, top.get("city"), top.get("state")) if p)
+        seen = [r["first_seen_at"] for r in recs if r.get("first_seen_at")]
         rows.append({
             "queue_date": queue_date,
+            "venue_key": top.get("venue_key"),
             "priority": min((r.get("tier") or "C") for r in recs),
             "score": top.get("score") or 0,
+            "lead_score": max((r.get("lead_score") or 0) for r in recs),
+            "hot": "Hot" if any(r.get("hot") for r in recs) else "",
+            "whats_new": _whats_new(recs),
+            "first_seen": min(seen) if seen else None,
             "business_name": _title(name),
             "company": _title(company) or None,
             "business_type": _business_type(min((r.get("tier") or "C") for r in recs), cats),
             "filing": _filing(_uniq(r.get("application_type") for r in recs), top["source"]),
-            "status": _status(_uniq(r.get("status") for r in recs), top["source"]),
+            "stage": _stage(recs, by_source),
             "filed_on": min(dates) if dates else None,
             "phone": ", ".join(_uniq(_phone(c.get("phone")) for c in contacts)) or None,
             "people": _people(contacts, (name, top.get("legal_name"))),
@@ -231,9 +277,14 @@ def group_records(records: list[dict]) -> list[dict]:
             "lead_ids": " ".join(str(r["record_id"]) for r in
                                  sorted(recs, key=lambda r: r["record_id"])),
         })
-    rows.sort(key=lambda r: (r["priority"], r["market"], -r["score"],
-                             r["business_name"] or ""))
+    rows.sort(key=sort_key)
     return rows
+
+
+def sort_key(row: dict):
+    """Highest lead score first, then priority, market, name."""
+    return (-(row.get("lead_score") or 0), row.get("priority") or "C",
+            row.get("market") or "", row.get("business_name") or "")
 
 
 def _cell(value):
@@ -257,14 +308,44 @@ def _csv_safe(value):
 
 
 def build_xlsx(rows: list[dict], title: str = "Leads") -> bytes:
+    """One sheet of venue rows (the New tab layout)."""
     from openpyxl import Workbook
+
+    wb = Workbook()
+    _write_sheet(wb.active, rows, COLUMNS, title)
+    return _save(wb)
+
+
+def build_workbook(new_rows: list[dict], open_rows: list[dict] | None = None) -> bytes:
+    """The owner's workbook: New, All open, one tab per state with open
+    leads (from the data, not a fixed list), then How scoring works."""
+    from openpyxl import Workbook
+
+    open_rows = sorted(open_rows or [], key=sort_key)
+    wb = Workbook()
+    _write_sheet(wb.active, sorted(new_rows, key=sort_key), COLUMNS, "New")
+    _write_sheet(wb.create_sheet(), open_rows, OPEN_COLUMNS, "All open")
+    for state in sorted({r.get("state") or "Other" for r in open_rows}):
+        _write_sheet(wb.create_sheet(),
+                     [r for r in open_rows if (r.get("state") or "Other") == state],
+                     OPEN_COLUMNS, state)
+    _write_legend(wb.create_sheet())
+    return _save(wb)
+
+
+def _save(wb) -> bytes:
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _write_sheet(ws, rows: list[dict], columns: list[tuple[str, str, int]],
+                 title: str) -> None:
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
-    wb = Workbook()
-    ws = wb.active
     ws.title = re.sub(r"[\[\]:*?/\\]", "-", title)[:31] or "Leads"
-    ws.append(HEADERS)
+    ws.append([h for _, h, _ in columns])
     head_fill = PatternFill("solid", fgColor="1F2937")
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
@@ -274,11 +355,13 @@ def build_xlsx(rows: list[dict], title: str = "Leads") -> bytes:
     fills = {"A": PatternFill("solid", fgColor="D1FAE5"),
              "B": PatternFill("solid", fgColor="FEF3C7"),
              "C": PatternFill("solid", fgColor="F3F4F6")}
+    hot_fill = PatternFill("solid", fgColor="FEE2E2")
     link_font = Font(color="1D4ED8", underline="single")
     link_cols = {"map_url": "Map", "google_url": "Search", "instagram_url": "Search",
                  "record_url": "Record"}
+    keys = [key for key, _, _ in columns]
     for i, row in enumerate(rows, start=2):
-        for j, (key, _, _) in enumerate(COLUMNS, start=1):
+        for j, key in enumerate(keys, start=1):
             value = _cell(row.get(key))
             cell = ws.cell(row=i, column=j)
             if key in link_cols:
@@ -292,15 +375,79 @@ def build_xlsx(rows: list[dict], title: str = "Leads") -> bytes:
                 cell.data_type = "s"  # never let a source string become a formula
             if isinstance(value, date):
                 cell.number_format = "yyyy-mm-dd"
-        prio = ws.cell(row=i, column=1)
+        prio = ws.cell(row=i, column=keys.index("priority") + 1)
         prio.alignment = Alignment(horizontal="center")
         if row.get("priority") in fills:
             prio.fill = fills[row["priority"]]
             prio.font = Font(bold=True)
-    for j, (_, _, width) in enumerate(COLUMNS, start=1):
+        if row.get("hot"):
+            hot = ws.cell(row=i, column=keys.index("hot") + 1)
+            hot.fill = hot_fill
+            hot.font = Font(bold=True, color="B91C1C")
+    for j, (_, _, width) in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(j)].width = width
-    ws.freeze_panes = "C2"
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{max(1, len(rows) + 1)}"
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    ws.freeze_panes = f"{get_column_letter(keys.index('business_name') + 2)}2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{max(1, len(rows) + 1)}"
+
+
+def legend_lines() -> list[tuple[str, str]]:
+    """(label, value) rows for the How scoring works tab, built from the
+    live points table in qualify.py so the two never drift."""
+    from . import qualify as q
+
+    lines = [
+        ("How scoring works", ""),
+        ("", ""),
+        ("Score", "0 to 100. Higher means a better ticketing fit. Parts add up."),
+        ("Hot", f"A nightclub or lounge (priority A) with a score of "
+                f"{q.hot_min_score()} or more."),
+        ("", ""),
+        ("Venue type", "Points"),
+        ("A: nightclub or lounge", q.TIER_POINTS["A"]),
+        ("B: bar or event venue", q.TIER_POINTS["B"]),
+        ("C: restaurant", q.TIER_POINTS["C"]),
+        ("", ""),
+        ("Nightlife license (highest one counts)", "Points"),
+    ]
+    lines += [(label, pts) for pts, label in sorted(q.NIGHTLIFE_LICENSE_POINTS.values(),
+                                                   key=lambda v: -v[0])]
+    lines += [("", ""), ("Stage", "Points")]
+    lines += [(s, q.STAGE_POINTS[s]) for s in stage_mod.STAGES]
+    lines += [
+        ("", ""),
+        ("Filing type", "Points"),
+        ("New filing or new location", q.FILING_POINTS[0][1]),
+        ("Change of owner", next(p for _, p, lab in q.FILING_POINTS
+                                 if lab == "change of owner")),
+        ("", ""),
+        ("Stages", ""),
+        ("Licensed", "Issued or active. Florida counts only if issued in the last 60 days."),
+        ("Approved", "Approved or conditional, not yet active."),
+        ("In review", "Past intake, in process."),
+        ("Received", "Just filed."),
+        ("", ""),
+        ("What's new", ""),
+        (NEW_FILING, "First time this filing showed up."),
+        (STAGE_ADVANCED, "A filing we already had moved to a later stage."),
+        (DETAILS_CHANGED, "Name, address, license or status changed."),
+        ("", ""),
+        ("Tabs", ""),
+        ("New", "The day's leads."),
+        ("All open", "Every lead not yet reviewed, from all days."),
+        ("State tabs", "All open, split by state."),
+    ]
+    return lines
+
+
+def _write_legend(ws) -> None:
+    from openpyxl.styles import Font
+
+    ws.title = "How scoring works"
+    for label, value in legend_lines():
+        ws.append([label, value])
+        if value == "Points" or label in ("How scoring works", "Stages", "What's new",
+                                           "Tabs"):
+            ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+            ws.cell(row=ws.max_row, column=2).font = Font(bold=True)
+    ws.column_dimensions["A"].width = 52
+    ws.column_dimensions["B"].width = 80

@@ -2,7 +2,7 @@
 
 The email body never contains lead data: no names, addresses, phones, links
 to records, or record ids. All detail lives ONLY in the attached Excel
-workbook built by ``licmon.leadsheet``.
+workbook built by ``licmon.leadsheet`` (New, All open, one tab per state).
 
 Public Actions logs must never contain lead data, email addresses or SMTP
 credentials. This module logs nothing with values in it: senders report only
@@ -39,6 +39,7 @@ def load_daily(conn, day: date) -> dict:
     from . import leadsheet  # lazy: keeps cli -> notify -> leadsheet one-way
 
     leads = leadsheet.load_rows(conn, day)
+    open_leads = leadsheet.load_rows(conn, None, open_only=True)
 
     day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     cutoff = day_start + timedelta(days=1)  # end of `day`, exclusive
@@ -53,7 +54,7 @@ def load_daily(conn, day: date) -> dict:
         srows = cur.fetchall()
         snames = [d.name for d in cur.description]
     sources = [dict(zip(snames, r)) for r in srows]
-    return {"leads": leads, "sources": sources}
+    return {"leads": leads, "open_leads": open_leads, "sources": sources}
 
 
 # ---------------------------------------------------------------------------
@@ -147,12 +148,14 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     count_a = sum(1 for lead in leads if _priority_of(lead) == "A")
     count_b = sum(1 for lead in leads if _priority_of(lead) == "B")
     count_c = sum(1 for lead in leads if _priority_of(lead) == "C")
+    count_hot = sum(1 for lead in leads if lead.get("hot"))
     failed = sum(1 for s in sources if s.get("status") == "failed")
 
     if total == 0:
         subject = f"Nightlife leads for {label}: no new leads"
     else:
-        subject = f"Nightlife leads for {label}: {total} new ({count_a} nightclubs)"
+        subject = f"Nightlife leads for {label}: {total} new ({count_a} nightclubs"
+        subject += f", {count_hot} hot)" if count_hot else ")"
     if failed == 1:
         subject += " (1 source needs attention)"
     elif failed > 1:
@@ -168,6 +171,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
         text_lines = [
             f"{total} new nightlife leads today. They are in the attached spreadsheet.",
             "",
+            f"Hot (best fit, call first): {count_hot}",
             f"Nightclubs (A): {count_a}",
             f"Bars and event venues (B): {count_b}",
             f"Restaurants (C): {count_c}",
@@ -188,7 +192,8 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
         h.append(f"<p>{e('No new leads today.')}</p>")
     else:
         h.append(f"<p>{e(text_lines[0])}</p>")
-        h.append(f"<p>{e(f'Nightclubs (A): {count_a}')}<br>"
+        h.append(f"<p>{e(f'Hot (best fit, call first): {count_hot}')}<br>"
+                 f"{e(f'Nightclubs (A): {count_a}')}<br>"
                  f"{e(f'Bars and event venues (B): {count_b}')}<br>"
                  f"{e(f'Restaurants (C): {count_c}')}</p>")
         h.append(f"<p>{e(f'By market: {market_text}')}</p>")
@@ -204,7 +209,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     msg.set_content(plain)
     msg.add_alternative(body_html, subtype="html")
     if total:
-        payload = leadsheet.build_xlsx(leads, title="Leads")
+        payload = leadsheet.build_workbook(leads, data.get("open_leads"))
         maintype, _, subtype = leadsheet.XLSX_MIME.partition("/")
         if not maintype or not subtype:
             maintype, subtype = "application", "octet-stream"

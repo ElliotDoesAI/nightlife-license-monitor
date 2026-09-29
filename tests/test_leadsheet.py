@@ -58,7 +58,7 @@ def test_group_merges_venue_and_cleans_fields():
     assert top["company"] == "Zebra Fake LLC"
     assert top["business_type"] == "Nightclub / lounge"
     assert top["filing"] == "New application"
-    assert top["status"] == "Pending"
+    assert top["stage"] == "In review"
     assert top["filed_on"] == date(2026, 9, 18)
     assert top["license"] == "Late Hours Certificate; Mixed Beverage Permit"
     assert top["lead_ids"] == "1 2"
@@ -78,16 +78,25 @@ def test_wa_phone_and_people_without_repeating_business():
     assert row["phone"] == "(206) 555-0100"
     assert row["people"] == "Jane Q Tester; John Tester"
     assert row["filing"] == "Change of owner"
-    assert row["status"] == "Approved"
+    assert row["stage"] == "Licensed"  # WA "approved" section = issued
 
 
 def test_filing_and_status_labels():
     assert leadsheet._filing(["NEW LICENSE"], "fl_abt_licenses") == "Newly licensed"
     assert leadsheet._filing([], "ca_abc_applications") == "New application"
     assert leadsheet._filing(["ADDED/CHANGE OF TRADENAME"], "x") == "Name change"
-    assert leadsheet._status(["Current"], "fl_abt_licenses") == "Licensed"
-    assert leadsheet._status(["IntakeComplete"], "ny_sla_pending") == "Pending"
-    assert leadsheet._status(["PEND"], "ca_abc_applications") == "Pending"
+    by_source = {"fl": FlAbtSource(), "ca": CaAbcSource()}
+
+    def stage_of(status, source):
+        return leadsheet._stage([{"status": status, "source": source}], by_source)
+
+    assert stage_of("Current", "fl") == "Licensed"
+    assert stage_of("PEND", "ca") == "Received"
+    assert stage_of("IntakeComplete", "unknown") == "Received"
+    assert stage_of("Withdrawn (application withdrawn)", "fl") == ""
+    # a stored stage wins over the status text
+    assert leadsheet._stage([{"status": "PEND", "stage": "Approved", "source": "ca"}],
+                            by_source) == "Approved"
 
 
 def test_xlsx_layout_links_and_no_formulas():
@@ -98,8 +107,8 @@ def test_xlsx_layout_links_and_no_formulas():
     ws = wb.active
     assert ws.title == "Leads 2026-10-01"
     assert [c.value for c in ws[1]] == leadsheet.HEADERS
-    assert ws.freeze_panes == "C2"
-    assert ws.auto_filter.ref == "A1:U3"
+    assert ws.freeze_panes == "E2"  # through Business name
+    assert ws.auto_filter.ref == "A1:X3"
     name_col = leadsheet.HEADERS.index("Business name") + 1
     evil = ws.cell(row=2, column=name_col)
     assert evil.data_type == "s" and evil.value.startswith("=")
@@ -122,3 +131,62 @@ def test_csv_has_headers_and_neutralizes_formulas():
 def test_empty_sheet_is_valid():
     wb = load_workbook(io.BytesIO(leadsheet.build_xlsx([])))
     assert [c.value for c in wb.active[1]] == leadsheet.HEADERS
+
+
+def test_score_hot_and_whats_new_per_venue():
+    rows = leadsheet.group_records([
+        rec(1, venue_key="v", tier="A", lead_score=85, hot=True, stage="Approved",
+            event_type="changed", changes={"stage": ["Received", "Approved"]}),
+        rec(2, venue_key="v", tier="A", lead_score=60, hot=False, stage="Received",
+            event_type="changed", changes={"status": ["A", "B"]}),
+        rec(3, venue_key="w", tier="B", lead_score=40, event_type="changed",
+            changes={"address": ["1 A ST", "2 A ST"]}),
+        rec(4, venue_key="x", tier="C", lead_score=90, event_type="new"),
+    ])
+    by_key = {r["venue_key"]: r for r in rows}
+    assert by_key["v"]["lead_score"] == 85 and by_key["v"]["hot"] == "Hot"
+    assert by_key["v"]["stage"] == "Approved"
+    assert by_key["v"]["whats_new"] == leadsheet.STAGE_ADVANCED
+    assert by_key["w"]["whats_new"] == leadsheet.DETAILS_CHANGED
+    assert by_key["x"]["whats_new"] == leadsheet.NEW_FILING
+    # sorted by score, highest first, whatever the tier
+    assert [r["venue_key"] for r in rows] == ["x", "v", "w"]
+
+
+def test_workbook_tabs_come_from_the_data():
+    new = leadsheet.group_records([
+        rec(1, tier="A", lead_score=80, hot=True, dba="ZEBRA FAKE LOUNGE", event_type="new"),
+        rec(2, tier="B", lead_score=50, dba="ZEBRA FAKE TAVERN", event_type="new")])
+    open_rows = leadsheet.group_records([
+        rec(1, tier="A", lead_score=80, hot=True, dba="ZEBRA FAKE LOUNGE"),
+        rec(5, tier="C", lead_score=30, dba="FAKE BISTRO", state="CA", city="LA",
+            queue_date=date(2026, 9, 28)),
+        rec(6, tier="B", lead_score=95, dba="FAKE TAPROOM", state="WA",
+            queue_date=date(2026, 9, 27))])
+    wb = load_workbook(io.BytesIO(leadsheet.build_workbook(new, open_rows)))
+    assert wb.sheetnames == ["New", "All open", "CA", "TX", "WA", "How scoring works"]
+    new_ws, open_ws = wb["New"], wb["All open"]
+    assert [c.value for c in new_ws[1]] == leadsheet.HEADERS
+    assert "What's new" in leadsheet.HEADERS and "Stage" in leadsheet.HEADERS
+    open_headers = [c.value for c in open_ws[1]]
+    assert "Queued on" in open_headers and "What's new" not in open_headers
+    hot_col = leadsheet.HEADERS.index("Hot") + 1
+    score_col = leadsheet.HEADERS.index("Score") + 1
+    assert new_ws.cell(row=2, column=hot_col).value == "Hot"
+    assert [new_ws.cell(row=r, column=score_col).value for r in (2, 3)] == [80, 50]
+    assert new_ws.cell(row=2, column=leadsheet.HEADERS.index("What's new") + 1).value \
+        == leadsheet.NEW_FILING
+    # All open: every day, highest score first
+    names = [open_ws.cell(row=r, column=open_headers.index("Business name") + 1).value
+             for r in (2, 3, 4)]
+    assert names == ["Fake Taproom", "Zebra Fake Lounge", "Fake Bistro"]
+    assert wb["CA"].max_row == 2 and wb["TX"].max_row == 2
+    legend = [c.value for c in wb["How scoring works"]["A"]]
+    assert "Public place of amusement (Chicago)" in legend and "Licensed" in legend
+    text = " ".join(str(v) for row in wb["How scoring works"].values for v in row if v)
+    assert "—" not in text  # no em dashes in owner-facing text
+
+
+def test_workbook_without_open_rows_is_valid():
+    wb = load_workbook(io.BytesIO(leadsheet.build_workbook([])))
+    assert wb.sheetnames == ["New", "All open", "How scoring works"]

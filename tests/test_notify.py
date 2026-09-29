@@ -67,12 +67,12 @@ def fake_xlsx(monkeypatch):
     """Pin the workbook bytes so tests never depend on the real builder."""
     calls = {}
 
-    def _build(rows, title="Leads"):
+    def _build(rows, open_rows=None):
         calls["rows"] = list(rows)
-        calls["title"] = title
+        calls["open_rows"] = open_rows
         return b"PK-fake"
 
-    monkeypatch.setattr(leadsheet, "build_xlsx", _build)
+    monkeypatch.setattr(leadsheet, "build_workbook", _build)
     return calls
 
 
@@ -205,7 +205,7 @@ def test_attachment_is_xlsx(fake_xlsx):
     assert part.get_content() == b"PK-fake"
     # the builder got the full lead rows (details live only in the file)
     assert fake_xlsx["rows"] == data["leads"]
-    assert fake_xlsx["title"] == "Leads"
+    assert fake_xlsx["open_rows"] is None  # sample data carries no open list
 
 
 def test_attachment_with_real_builder():

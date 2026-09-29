@@ -226,3 +226,20 @@ def test_stage_score_stored_requalified_and_labelled(pg, monkeypatch):
         cur.execute("SELECT count(*) FROM records WHERE stage='Received' AND lead_score > 0")
         assert cur.fetchone()[0] == 2
 
+
+def test_stage_advanced_label_and_view_columns(pg):
+    from licmon import leadsheet
+
+    rows = [{"id": "30", "name": "Fake Velvet Lounge LLC", "date": "2026-08-31"}]
+    src = FakeSource(rows)
+    pipeline.run([src], conn=pg, http=object(), now=DAY1)
+    rows[0]["status"] = "Approved"
+    pipeline.run([src], conn=pg, http=object(), now=DAY2)
+    [lead] = leadsheet.load_rows(pg, DAY2.date())
+    assert lead["whats_new"] == leadsheet.STAGE_ADVANCED
+    assert lead["stage"] == "Approved" and lead["lead_score"] == 45 + 20 + 10
+    with pg.cursor() as cur:
+        cur.execute("SELECT stage, lead_score, hot FROM daily_leads WHERE queue_date=%s",
+                    (DAY2.date(),))
+        assert cur.fetchone() == ("Approved", 75, True)
+    db.init_schema(pg)  # schema.sql re-runs cleanly on an existing database
