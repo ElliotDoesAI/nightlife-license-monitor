@@ -137,7 +137,11 @@ CONCESSION_VENUE_WORDS = re.compile(
 ADULT_WORDS = re.compile(
     r"\bGENTLEM[AE]N'?S? (CLUB|CABARET|LOUNGE|BAR)\b|\bSTRIP ?CLUBS?\b|\bSTRIPTEASE\b|"
     r"\bTOPLESS\b|\bBIKINI BAR\b|"
-    r"\bADULT (ENTERTAINMENT|CABARET|CLUB|NIGHTCLUB|LOUNGE)\b")
+    r"\bADULT (ENTERTAINMENT|CABARET|CLUB|NIGHTCLUB|LOUNGE)\b|"
+    # Well-known adult club brands whose names carry no generic adult word.
+    r"\bPURE PLATINUM\b|\bSPEARMINT RHINO\b|\bRICK'?S CABARET\b|\bHUSTLER CLUB\b|"
+    r"\bPENTHOUSE CLUB\b|\bDEJA VU SHOWGIRLS\b|\bSHOWGIRLS\b|\bLARRY FLYNT'?S\b|"
+    r"\bTOOTSIE'?S CABARET\b|\bSCORES GENTLEMEN\b|\bSAPPHIRE GENTLEMEN\b")
 
 # Obvious bars and event venues (tier B).
 BAR_VENUE_WORDS = re.compile(

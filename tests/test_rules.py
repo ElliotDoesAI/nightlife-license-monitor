@@ -228,3 +228,9 @@ def test_adult_flag_keeps_tier_but_never_hot(monkeypatch):
     assert not q.adult and q.hot
     assert not qualify(rec(dba="Fake Cabaret", category="nightlife"), "Houston").adult
     assert not qualify(rec(dba="Fake Gentlemen's Barbershop Bar"), "Houston").adult
+
+
+def test_adult_flag_on_known_brand_without_generic_word():
+    assert qualify(rec(dba="Pure Platinum", license_description="PUBLIC PREMISES",
+                       category="nightlife"), "San Diego").adult
+    assert not qualify(rec(dba="Platinum Lounge", category="nightlife"), "Houston").adult
