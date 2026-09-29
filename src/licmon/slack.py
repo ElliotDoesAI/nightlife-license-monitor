@@ -64,8 +64,9 @@ def compose(rows: list[dict], attio_counts: dict | None = None,
 
     tail = []
     if attio_counts:
-        tail.append(f"Added to Attio: {attio_counts.get('created', 0)}")
-        over = attio_counts.get("over_cap") or 0
+        added = attio_counts.get("added", attio_counts.get("created", 0)) or 0
+        tail.append(f"Added to Attio: {added} new, {attio_counts.get('updated', 0) or 0} updated")
+        over = attio_counts.get("skipped", attio_counts.get("over_cap")) or 0
         if over:
             tail.append(f"{over} more over today's Attio limit, in the spreadsheet")
     tail.append("Full list in today's email.")

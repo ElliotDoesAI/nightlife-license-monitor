@@ -63,8 +63,8 @@ jobs:
           LEADS_EMAIL_TO: ${{ secrets.LEADS_EMAIL_TO }}
           HOT_MIN_SCORE: ${{ vars.HOT_MIN_SCORE || '75' }}
         run: uv run licmon email
-      # Upserts today's Hot and A venues into the Attio "License Leads" object
-      # (internal CRM; nothing contacts a business). Skips itself when
+      # Adds today's Hot and A venues to the Attio "License Leads" list on
+      # Targets (internal CRM; nothing contacts a business). Skips itself when
       # ATTIO_API_KEY is not set. Logs counts only; the counts file feeds Slack.
       - name: Sync to Attio
         if: ${{ !cancelled() && inputs.source == '' }}

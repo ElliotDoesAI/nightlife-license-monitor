@@ -15,7 +15,7 @@ The message looks like this (synthetic example):
 ```
 New license leads: 14 today (3 Hot, 5 A, 6 B)
 Hot: Club X, Houston (Approved) · Lounge Y, Miami (Licensed) · ...
-Added to Attio: 8 · Full list in today's email.  <link to License Leads in Attio>
+Added to Attio: 8 new, 2 updated · Full list in today's email.  <link to License Leads in Attio>
 ```
 
 At most five Hot names, with city and stage only: no addresses, phones or

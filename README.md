@@ -64,8 +64,9 @@ point at ABC's public license lookup page for a human to open.
    no lead details). It sends on empty days too (heartbeat) and skips itself when the SMTP
    secrets are not set. `licmon email --preview DIR` writes the message to
    files instead of sending.
-9. `licmon attio-sync --write` upserts the day's Hot and A venues into the
-   Attio "License Leads" object, and `licmon slack` pings the team's Slack
+9. `licmon attio-sync --write` adds the day's Hot and A venues to the Attio
+   "License Leads" list on the Targets object (reusing a Target with the
+   same name, else making a minimal one), and `licmon slack` pings the team's Slack
    channel when there is a new or stage-advanced lead. Both skip themselves
    when their secret is not set and log counts only.
 

@@ -21,7 +21,7 @@ It runs by itself every day at 15:30 UTC on GitHub Actions
 private Neon Postgres database (project `tiny-truth-43995411`, branch
 `production`). When the email secrets are set, the same run then emails the
 owner that day's leads with a spreadsheet attached, sends the day's Hot and A
-venues to the "License Leads" object in Attio, and pings the team's Slack
+venues to the "License Leads" list in Attio, and pings the team's Slack
 channel. Each of those three steps skips itself until its settings exist.
 Nobody has to start it.
 
@@ -155,15 +155,22 @@ After the email, the workflow runs `licmon attio-sync --write` and then
 `licmon slack`. Both skip themselves (run stays green) until their secret is
 set, and both log counts only.
 
-- **Attio** gets only the day's Hot and A venues, in a separate object named
-  "License Leads" (api slug `license_leads`), so the rest of the CRM stays
-  clean. Records are matched on the unique Venue key, so a venue is never
-  created twice; a venue that comes back gets its stage and score updated.
-  The team's **Status** field is set to New when a record is created and is
-  never overwritten after that. At most `ATTIO_DAILY_CAP` (default 25) new
-  records a day, highest score first; the rest stay in the spreadsheet.
-  The object is created once with `licmon attio-setup --write` (skill
-  `attio-sync`). It only creates new things and stops if the object exists.
+- **Attio** gets only the day's Hot and A venues. Each one is a record in
+  the existing **Targets** object, added to a list named "License Leads"
+  (api slug `license_leads`) that sits on Targets. All the lead details
+  (venue key, priority, score, stage, market, address, owner, phone,
+  license, dates, links) live on the list entry, so the Targets object
+  itself is never changed. A venue is matched on its Venue key, so it is
+  never added twice; one that comes back gets only its stage, score and
+  priority updated. If Targets already has a record with the same name
+  (ignoring upper and lower case), that record is reused. Otherwise a new
+  Target is made with just the name, client type Venue and status
+  Prespecting (Attio's own spelling). The team's **Status** on the list
+  (New, Moved to Targets, Not a fit, Contacted) starts at New and is never
+  overwritten. At most `ATTIO_DAILY_CAP` (default 25) new Targets a day,
+  highest score first; the rest stay in the spreadsheet. The list is
+  created once with `licmon attio-setup --write` (skill `attio-sync`). It
+  only creates new things and stops if the list exists.
 - **Slack** posts only when the day has a new filing or a stage-advanced
   lead: counts (Hot, A, B, C), up to five Hot venue names with city and
   stage, how many went to Attio, and a link to the Attio list. No addresses,
@@ -171,8 +178,8 @@ set, and both log counts only.
 
 | Name | Kind | Value |
 |---|---|---|
-| `ATTIO_API_KEY` | secret | Attio API key; needs `record_permission:read-write` and `object_configuration:read` (plus `object_configuration:read-write` for `attio-setup`) |
-| `ATTIO_DAILY_CAP` | variable, optional | most new Attio records per day, default `25` |
+| `ATTIO_API_KEY` | secret | Attio API key; needs `list_entry:read-write`, `list_configuration:read`, `record_permission:read-write` and `object_configuration:read` (plus `list_configuration:read-write` for `attio-setup`) |
+| `ATTIO_DAILY_CAP` | variable, optional | most new Targets Attio gets per day, default `25` |
 | `ATTIO_LEADS_URL` | variable, optional | the License Leads page URL copied from the Attio browser tab, linked from Slack |
 | `SLACK_WEBHOOK_URL` | secret | Slack incoming webhook URL (the channel is picked when it is made) |
 | `HOT_MIN_SCORE` | variable, optional | score a tier A lead needs to be Hot, default `75` |
@@ -206,8 +213,10 @@ stored records.
   an empty commit after 45 quiet days. If it happened anyway:
   `gh workflow enable daily-collect`.
 - **Attio step red.** `attio failed (HTTP 401)` or `(HTTP 403)`: the key is
-  wrong or lacks a scope (see "Attio and Slack"). `object license_leads not
-  found`: run `licmon attio-setup` once (skill `attio-sync`).
+  wrong or lacks a scope (see "Attio and Slack"). The word after the number
+  is Attio's reason, for example `quota_exceeded` (the Attio plan's limit).
+  `list license_leads not found`: run `licmon attio-setup` once (skill
+  `attio-sync`).
 - **Slack step red.** `slack failed (HTTP 403)` or `(HTTP 404)`: the webhook
   was removed; make a new one (skill `slack-setup`).
 - **After changing rules** in `src/licmon/qualify.py` or `src/licmon/metros.py`,
@@ -271,7 +280,7 @@ needed at current volumes.
 | `run-now` | run the collection right now |
 | `pause-resume` | pause or restart the daily run |
 | `email-setup` | set up, change, preview or test the daily email |
-| `attio-sync` | set up the Attio License Leads object, or push leads to Attio |
+| `attio-sync` | set up the Attio License Leads list, or push leads to Attio |
 | `slack-setup` | set up, preview or test the Slack ping |
 | `fix-broken-source` | fix a red run or a source that changed format |
 | `add-source` | add a new state or city |

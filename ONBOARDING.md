@@ -202,7 +202,7 @@ On every tab the best leads are at the top. Each row is one venue:
   to mark reviewed.
 
 Once they are set up, the same run also puts the Hot and A leads into a
-"License Leads" list in Attio, and posts a short note in your team's Slack
+"License Leads" list in Attio, on your Targets, and posts a short note in your team's Slack
 channel when new leads come in. The Slack note shows the counts and a few
 Hot venue names with their city. Addresses and phone numbers stay in the
 spreadsheet and Attio.

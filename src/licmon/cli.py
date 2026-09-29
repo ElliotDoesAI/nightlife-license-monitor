@@ -269,8 +269,8 @@ def cmd_requalify(args) -> int:
 
 
 def cmd_attio_setup(args) -> int:
-    """Create the License Leads object in Attio. Dry run unless --write.
-    Prints schema names only."""
+    """Create the License Leads list on Targets in Attio. Dry run unless
+    --write. Prints schema names only."""
     from . import attio
 
     log = logging.getLogger("licmon")
@@ -292,8 +292,8 @@ def cmd_attio_setup(args) -> int:
 
 
 def cmd_attio_sync(args) -> int:
-    """Upsert the day's Hot and A venues into Attio. Dry run unless --write.
-    Logs counts only: Actions logs are public."""
+    """Add the day's Hot and A venues to the Attio License Leads list. Dry
+    run unless --write. Logs counts only: Actions logs are public."""
     from . import attio, leadsheet
 
     log = logging.getLogger("licmon")
@@ -310,14 +310,16 @@ def cmd_attio_sync(args) -> int:
     try:
         counts = attio.sync(client, rows, write=args.write)
     except attio.AttioError as exc:
-        log.error("%s", exc)  # AttioError text is "attio failed (<status or type>)"
+        log.error("%s", exc)  # "attio failed (HTTP <status> <code>)": no lead data
         return 1
     if args.counts:
         attio.write_counts(args.counts, counts)
-    log.info("attio sync%s: %d candidates (%d hot), %s %d, updated %d, over daily cap %d",
+    verb = "" if args.write else "would be "
+    log.info("attio sync%s: %d candidates (%d hot); list entries %sadded %d, %supdated %d; "
+             "new Targets %d, existing Targets reused %d; skipped over daily cap %d",
              "" if args.write else " (dry run)", counts["candidates"], counts["hot"],
-             "created" if args.write else "would create", counts["created"],
-             counts["updated"], counts["over_cap"])
+             verb, counts["added"], verb, counts["updated"], counts["created"],
+             counts["reused"], counts["skipped"])
     return 0
 
 
@@ -397,13 +399,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("requalify", help="re-apply qualification rules").set_defaults(
         func=cmd_requalify)
 
-    a = sub.add_parser("attio-setup", help="create the License Leads object in Attio "
-                                           "(dry run unless --write)")
+    a = sub.add_parser("attio-setup", help="create the License Leads list on Targets in "
+                                           "Attio (dry run unless --write)")
     a.add_argument("--write", action="store_true", help="really create it")
     a.set_defaults(func=cmd_attio_setup)
 
-    s = sub.add_parser("attio-sync", help="send the day's Hot and A venues to Attio "
-                                          "(dry run unless --write)")
+    s = sub.add_parser("attio-sync", help="add the day's Hot and A venues to the Attio "
+                                          "License Leads list (dry run unless --write)")
     s.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
     s.add_argument("--write", action="store_true", help="really write to Attio")
     s.add_argument("--counts", metavar="FILE", help="write counts-only JSON here for Slack")
