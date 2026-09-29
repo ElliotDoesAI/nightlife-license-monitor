@@ -1,0 +1,46 @@
+# Daily collection. Runs in the public repo but writes only to the private
+# database. Logs print counts per source, never record contents.
+name: daily-collect
+
+on:
+  schedule:
+    # 15:30 UTC = 8:30 PT / 10:30 CT. After the CA export (~7am PT) and the
+    # TX / NY / Chicago overnight refreshes.
+    - cron: "30 15 * * *"
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Only this source (blank = all). e.g. ny_sla_pending"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --no-dev
+      - name: Collect all sources
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+          ONLY_SOURCE: ${{ inputs.source }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          if [ -n "$ONLY_SOURCE" ]; then
+            uv run licmon run --trigger "$TRIGGER" --source "$ONLY_SOURCE"
+          else
+            uv run licmon run --trigger "$TRIGGER"
+          fi

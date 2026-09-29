@@ -1,0 +1,17 @@
+# Operational data must never be committed (public repo).
+data/
+exports/
+*.csv
+*.zip
+*.db
+*.sqlite
+*.html
+!tests/fixtures/*.html
+!tests/fixtures/*.csv
+!tests/fixtures/*.zip
+.env
+.env.*
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/

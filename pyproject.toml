@@ -1,0 +1,25 @@
+[project]
+name = "licmon"
+version = "0.1.0"
+description = "Daily nightlife liquor-license lead monitor"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "psycopg[binary]>=3.1",
+]
+
+[project.scripts]
+licmon = "licmon.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/licmon"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

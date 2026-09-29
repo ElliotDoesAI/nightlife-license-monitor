@@ -1,0 +1,232 @@
+"""Command line. `licmon run` is what the scheduled workflow calls.
+
+Commands that print lead data (queue, export) are for the operator's own
+machine only. Never run them in the public GitHub Actions workflow.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import logging
+import sys
+from datetime import date, datetime, timezone
+
+from . import db, pipeline
+from .metros import assign_metro
+from .models import Record, venue_key
+from .qualify import qualify
+from .sources import get_sources
+
+LEAD_COLUMNS = [
+    "queue_date", "tier", "score", "legal_name", "dba", "metro", "address", "city",
+    "state", "zip", "county", "license_types", "license_descriptions",
+    "application_types", "statuses", "application_date", "event_types",
+    "source", "source_record_ids", "source_url", "first_seen_at", "qualify_reason",
+    "review_status", "review_notes", "record_ids",
+]
+RECORD_EXPORT_COLUMNS = [
+    "queue_date", "event_type", "tier", "score", "legal_name", "dba",
+    "source_record_id", "license_type", "license_description", "application_type",
+    "status", "application_date", "address", "city", "state", "zip", "county",
+    "metro", "source", "source_url", "first_seen_at", "qualify_reason",
+    "review_status", "review_notes", "changes", "record_id",
+]
+REVIEW_STATUSES = ("new", "approved", "rejected", "contacted", "snoozed")
+
+
+def cmd_run(args) -> int:
+    results = pipeline.run(get_sources(args.source), trigger=args.trigger)
+    failed = [r.source for r in results if r.status != "success"]
+    if failed:
+        logging.getLogger("licmon").error("failed sources: %s", ", ".join(failed))
+        return 1
+    return 0
+
+
+def cmd_probe(args) -> int:
+    """Fetch + parse without a database. Counts only; safe for public logs."""
+    import time
+    from collections import Counter
+
+    from .http import Http
+
+    log = logging.getLogger("licmon")
+    http, failed = Http(), 0
+    for source in get_sources(args.source):
+        t0 = time.monotonic()
+        try:
+            snaps = source.fetch(http)
+            recs = list(source.parse(snaps))
+            size = sum(len(s.body) for s in snaps)
+            metros = sum(1 for r in recs if assign_metro(r.state, r.county, r.city))
+            cats = Counter(r.category for r in recs)
+            ok = len(recs) >= source.min_records
+            failed += not ok
+            log.info("probe %s: %s %d bytes, %d records (%d in target metros) in %.1fs; %s",
+                     source.name, "ok" if ok else "BELOW FLOOR", size, len(recs), metros,
+                     time.monotonic() - t0, dict(cats.most_common()))
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            from .http import SourceHTTPError
+            msg = f": {exc}" if isinstance(exc, SourceHTTPError) else ""
+            log.error("probe %s: FAILED (%s)%s", source.name, type(exc).__name__, msg)
+    return 1 if failed else 0
+
+
+def cmd_init_db(args) -> int:
+    with db.connect() as conn:
+        db.init_schema(conn)
+    print("schema ready")
+    return 0
+
+
+def _queue_rows(conn, day: date | None, open_only: bool, per_record: bool = False):
+    view, columns = (("review_queue", RECORD_EXPORT_COLUMNS) if per_record
+                     else ("daily_leads", LEAD_COLUMNS))
+    where, params = [], []
+    if day:
+        where.append("queue_date = %s")
+        params.append(day)
+    if open_only:
+        where.append("review_status = 'new'")
+    sql = (f"SELECT {', '.join(columns)} FROM {view}"
+           + (f" WHERE {' AND '.join(where)}" if where else "")
+           + " ORDER BY queue_date DESC, tier, score DESC, metro, legal_name")
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return columns, cur.fetchall()
+
+
+def cmd_export(args) -> int:
+    day = None if args.all else (args.date or datetime.now(timezone.utc).date())
+    with db.connect() as conn:
+        columns, rows = _queue_rows(conn, day, args.open, args.per_record)
+    out = open(args.out, "w", newline="") if args.out else sys.stdout
+    try:
+        w = csv.writer(out)
+        w.writerow(columns)
+        w.writerows(rows)
+    finally:
+        if args.out:
+            out.close()
+    print(f"{len(rows)} {'records' if args.per_record else 'leads'}" + (f" -> {args.out}" if args.out else ""), file=sys.stderr)
+    return 0
+
+
+def cmd_status(args) -> int:
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT DISTINCT ON (source) source, started_at, status, is_baseline,
+                      records_fetched, records_new, records_changed, records_removed,
+                      records_qualified_queued, error_type
+               FROM source_runs ORDER BY source, started_at DESC""")
+        rows = cur.fetchall()
+        cur.execute("""SELECT queue_date, count(*) FROM daily_leads
+                       GROUP BY 1 ORDER BY 1 DESC LIMIT 7""")
+        days = cur.fetchall()
+    print("latest run per source:")
+    for r in rows:
+        print(f"  {r[0]:<22} {r[1]:%Y-%m-%d %H:%M} {r[2]:<8}"
+              f"{' baseline' if r[3] else ''} fetched={r[4]} new={r[5]} "
+              f"changed={r[6]} removed={r[7]} queued={r[8]}"
+              + (f" error={r[9]}" if r[9] else ""))
+    print("queue size by day:")
+    for d, n in days:
+        print(f"  {d}  {n}")
+    return 0
+
+
+def cmd_review(args) -> int:
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE records SET review_status=%s,
+                   review_notes=COALESCE(%s, review_notes), reviewed_at=now()
+               WHERE id = ANY(%s)""",
+            (args.status, args.note, args.record_id))
+        n = cur.rowcount
+        conn.commit()
+    print(f"updated {n} record(s)")
+    return 0 if n else 1
+
+
+def cmd_requalify(args) -> int:
+    """Re-run the rules on stored records after editing qualify.py/metros.py.
+    Does not add anything to past queues."""
+    cols = ("id", "source", "source_record_id", "source_url", "legal_name", "dba",
+            "license_type", "license_description", "application_type", "status",
+            "application_date", "address", "city", "state", "zip", "county", "category")
+    # raw is not needed to requalify
+    changed = 0
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT {', '.join(cols)}, qualified, score, tier, qualify_reason, "
+                    "metro, venue_key FROM records")
+        updates = []
+        for row in cur.fetchall():
+            d = dict(zip(cols, row))
+            rid = d.pop("id")
+            rec = Record(**d)
+            metro = assign_metro(rec.state, rec.county, rec.city)
+            q = qualify(rec, metro)
+            vk = venue_key(rec)
+            new = (q.qualified, q.score, q.tier, q.reason, metro, vk)
+            if new != tuple(row[len(cols):]):
+                updates.append(new + (rid,))
+        cur.executemany("UPDATE records SET qualified=%s, score=%s, tier=%s, "
+                        "qualify_reason=%s, metro=%s, venue_key=%s WHERE id=%s", updates)
+        changed = len(updates)
+        conn.commit()
+    print(f"requalified {changed} record(s)")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    p = argparse.ArgumentParser(prog="licmon", description=__doc__)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("run", help="collect all (or named) sources now")
+    r.add_argument("--source", action="append", help="source name; repeatable")
+    r.add_argument("--trigger", default="manual")
+    r.set_defaults(func=cmd_run)
+
+    pr = sub.add_parser("probe", help="fetch+parse without a database (counts only)")
+    pr.add_argument("--source", action="append", help="source name; repeatable")
+    pr.set_defaults(func=cmd_probe)
+
+    sub.add_parser("init-db", help="create/upgrade tables").set_defaults(func=cmd_init_db)
+    sub.add_parser("status", help="latest run per source (no lead data)").set_defaults(
+        func=cmd_status)
+
+    e = sub.add_parser("export", help="write the review queue as CSV (local only)")
+    e.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
+    e.add_argument("--all", action="store_true", help="every queued lead, all dates")
+    e.add_argument("--open", action="store_true", help="only review_status = new")
+    e.add_argument("--per-record", action="store_true",
+                   help="one row per application instead of per venue")
+    e.add_argument("--out", help="output file (default stdout)")
+    e.set_defaults(func=cmd_export)
+
+    v = sub.add_parser("review", help="set review status on record id(s)")
+    v.add_argument("record_id", type=int, nargs="+")
+    v.add_argument("--status", required=True, choices=REVIEW_STATUSES)
+    v.add_argument("--note")
+    v.set_defaults(func=cmd_review)
+
+    sub.add_parser("requalify", help="re-apply qualification rules").set_defaults(
+        func=cmd_requalify)
+
+    args = p.parse_args(argv)
+    try:
+        return args.func(args)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # Tracebacks can echo record values; print the type only.
+        logging.getLogger("licmon").error("fatal: %s (details suppressed; "
+                                          "logs are public)", type(exc).__name__)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

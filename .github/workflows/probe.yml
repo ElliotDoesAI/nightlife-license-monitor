@@ -1,0 +1,21 @@
+# Manual troubleshooting: can GitHub's runners reach and parse every source?
+# No database, no secrets. Prints counts only.
+name: probe-sources
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --no-dev
+      - run: uv run licmon probe
