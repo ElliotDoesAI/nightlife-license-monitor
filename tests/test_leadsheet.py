@@ -56,7 +56,7 @@ def test_group_merges_venue_and_cleans_fields():
     top = rows[0]
     assert top["priority"] == "A"
     assert top["company"] == "Zebra Fake LLC"
-    assert top["business_type"] == "Nightclub / lounge"
+    assert top["business_type"] == "Nightclub / lounge / ticketed venue"
     assert top["filing"] == "New application"
     assert top["stage"] == "In review"
     assert top["filed_on"] == date(2026, 9, 18)
@@ -185,6 +185,18 @@ def test_workbook_tabs_come_from_the_data():
     assert "Public place of amusement (Chicago)" in legend and "Licensed" in legend
     text = " ".join(str(v) for row in wb["How scoring works"].values for v in row if v)
     assert "—" not in text  # no em dashes in owner-facing text
+    assert ("A: nightclubs, lounges and ticketed venues (comedy, live music, sports, "
+            "theaters, event venues)") in legend
+    assert "(adult) in Business type" in legend
+    assert any(str(v).startswith("Theater or performing arts") for v in legend)
+
+
+def test_adult_venue_is_marked_in_business_type():
+    [row] = leadsheet.group_records([rec(1, tier="A", dba="ZEBRA FAKE CLUB", adult=True)])
+    assert row["adult"] is True
+    assert row["business_type"] == "Nightclub / lounge / ticketed venue (adult)"
+    [row] = leadsheet.group_records([rec(1, tier="B", dba="ZEBRA FAKE BAR")])
+    assert row["adult"] is False and row["business_type"] == "Bar / event venue"
 
 
 def test_workbook_without_open_rows_is_valid():

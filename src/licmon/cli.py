@@ -25,6 +25,7 @@ LEAD_COLUMNS = [
     "application_types", "statuses", "application_date", "event_types",
     "source", "source_record_ids", "source_url", "first_seen_at", "qualify_reason",
     "review_status", "review_notes", "record_ids", "stage", "lead_score", "hot",
+    "adult",
 ]
 RECORD_EXPORT_COLUMNS = [
     "queue_date", "event_type", "tier", "score", "legal_name", "dba",
@@ -32,7 +33,7 @@ RECORD_EXPORT_COLUMNS = [
     "status", "application_date", "address", "city", "state", "zip", "county",
     "metro", "source", "source_url", "first_seen_at", "qualify_reason",
     "review_status", "review_notes", "changes", "record_id", "stage", "lead_score",
-    "hot",
+    "hot", "adult",
 ]
 REVIEW_STATUSES = ("new", "approved", "rejected", "contacted", "snoozed")
 
@@ -245,7 +246,7 @@ def cmd_requalify(args) -> int:
         db.init_schema(conn)  # new score columns may not exist yet
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT {', '.join(cols)}, qualified, score, tier, qualify_reason, "
-                    "metro, venue_key, stage, lead_score, hot FROM records")
+                    "metro, venue_key, stage, lead_score, hot, adult FROM records")
         updates = []
         today = datetime.now(timezone.utc).date()
         for row in cur.fetchall():
@@ -256,12 +257,12 @@ def cmd_requalify(args) -> int:
             q = qualify(rec, metro, today=today)
             vk = venue_key(rec)
             new = (q.qualified, q.score, q.tier, q.reason, metro, vk, q.stage,
-                   q.lead_score, q.hot)
+                   q.lead_score, q.hot, q.adult)
             if new != tuple(row[len(cols):]):
                 updates.append(new + (rid,))
         cur.executemany("UPDATE records SET qualified=%s, score=%s, tier=%s, "
                         "qualify_reason=%s, metro=%s, venue_key=%s, stage=%s, "
-                        "lead_score=%s, hot=%s WHERE id=%s", updates)
+                        "lead_score=%s, hot=%s, adult=%s WHERE id=%s", updates)
         changed = len(updates)
         conn.commit()
     print(f"requalified {changed} record(s)")
@@ -292,8 +293,9 @@ def cmd_attio_setup(args) -> int:
 
 
 def cmd_attio_sync(args) -> int:
-    """Add the day's Hot and A venues to the Attio License Leads list. Dry
-    run unless --write. Logs counts only: Actions logs are public."""
+    """Add the day's Hot, A and strong B venues (never adult) to the Attio
+    License Leads list. Dry run unless --write. Logs counts only: Actions
+    logs are public."""
     from . import attio, leadsheet
 
     log = logging.getLogger("licmon")
@@ -316,10 +318,15 @@ def cmd_attio_sync(args) -> int:
         attio.write_counts(args.counts, counts)
     verb = "" if args.write else "would be "
     log.info("attio sync%s: %d candidates (%d hot); list entries %sadded %d, %supdated %d; "
-             "new Targets %d, existing Targets reused %d; skipped over daily cap %d",
+             "new Targets %d, existing Targets reused %d; skipped over daily cap %d; "
+             "B leads sent %d; priority options added %d; B leads held back %d",
              "" if args.write else " (dry run)", counts["candidates"], counts["hot"],
              verb, counts["added"], verb, counts["updated"], counts["created"],
-             counts["reused"], counts["skipped"])
+             counts["reused"], counts["skipped"], counts["b"], counts["options_added"],
+             counts["b_held"])
+    if counts["b_held"]:
+        log.warning("attio: priority option B is missing and this key cannot add it "
+                    "(needs list_configuration:read-write); B leads wait until it exists")
     return 0
 
 
@@ -404,8 +411,9 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--write", action="store_true", help="really create it")
     a.set_defaults(func=cmd_attio_setup)
 
-    s = sub.add_parser("attio-sync", help="add the day's Hot and A venues to the Attio "
-                                          "License Leads list (dry run unless --write)")
+    s = sub.add_parser("attio-sync", help="add the day's Hot, A and strong B venues to "
+                                          "the Attio License Leads list (dry run unless "
+                                          "--write)")
     s.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
     s.add_argument("--write", action="store_true", help="really write to Attio")
     s.add_argument("--counts", metavar="FILE", help="write counts-only JSON here for Slack")

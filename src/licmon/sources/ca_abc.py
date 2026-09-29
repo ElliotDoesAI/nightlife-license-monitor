@@ -152,7 +152,7 @@ LICENSE_TYPES = {
 # venue) is nightlife in spirit (bar/nightclub/amusement). Types 67/80
 # (bed & breakfast inns) join 66/70 under hotel.
 _NIGHTLIFE = {"40", "42", "48", "61", "90"}
-_ON_PREMISE = {"41", "47", "49", "50", "51", "52", "57", "59", "60"}
+_ON_PREMISE = {"41", "47", "49", "50", "51", "52", "57", "59", "60", "69", "71", "72"}
 _HOSPITALITY_MFG = {"01", "02", "04", "23", "74", "75"}
 _CATERING_EVENT = {"58", "64", "77", "81", "83", "93"}
 _HOTEL = {"66", "67", "70", "80"}
@@ -178,8 +178,13 @@ CATEGORY_PRIORITY: tuple[tuple[str, frozenset[str]], ...] = (
 assert all(cat in CATEGORIES for cat, _ in CATEGORY_PRIORITY)
 
 
-# Nightlife license codes -> qualify.NIGHTLIFE_LICENSE_POINTS keys.
-NIGHTLIFE_CODES = {"48": "public_premises", "90": "music_venue"}
+# Nightlife license codes -> qualify.NIGHTLIFE_LICENSE_POINTS keys. The
+# theater types (64 nonprofit theater company, 69 beer and wine theater,
+# 71/72 for-profit theaters) sell tickets by definition. The code table has
+# no stadium or sports type: CA stadiums file ordinary on-sale types, so the
+# name decides those.
+NIGHTLIFE_CODES = {"48": "public_premises", "90": "music_venue",
+                   "64": "theater", "69": "theater", "71": "theater", "72": "theater"}
 
 
 def categorize(codes: list[str]) -> str:
@@ -227,7 +232,8 @@ class CaAbcSource(Source):
 
     def nightlife_license(self, rec: Record) -> tuple[str, ...]:
         codes = {c.strip() for c in (rec.license_type or "").split(",")}
-        return tuple(key for code, key in NIGHTLIFE_CODES.items() if code in codes)
+        return tuple(dict.fromkeys(key for code, key in NIGHTLIFE_CODES.items()
+                                   if code in codes))
 
     def contact(self, raw: dict) -> dict:
         for row in raw.get("rows") or []:

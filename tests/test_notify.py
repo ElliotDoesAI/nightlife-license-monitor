@@ -87,7 +87,7 @@ def bodies(msg):
 def test_subject_counts(fake_xlsx):
     msg = notify.compose(sample_data(), DAY, sender="s@example.invalid",
                          recipients=["o@example.invalid"])
-    assert str(msg["Subject"]) == "Nightlife leads for Tue, Sep 29: 7 new (3 nightclubs)"
+    assert str(msg["Subject"]) == "Nightlife leads for Tue, Sep 29: 7 new (3 A)"
 
 
 def test_subject_failed_suffix_singular_plural(fake_xlsx):
@@ -118,7 +118,7 @@ def test_body_counts_and_market_line(fake_xlsx):
     msg = notify.compose(sample_data(), DAY, sender="s", recipients=["o"])
     plain, html_body = bodies(msg)
     assert "7 new nightlife leads today. They are in the attached spreadsheet." in plain
-    assert "Nightclubs (A): 3" in plain
+    assert "Nightclubs, lounges and ticketed venues (A): 3" in plain
     assert "Bars and event venues (B): 2" in plain
     assert "Restaurants (C): 2" in plain
     # markets sorted by count desc, then name: Houston 3, then the 2-count tie
@@ -126,7 +126,7 @@ def test_body_counts_and_market_line(fake_xlsx):
     assert "All 2 sources checked in normally." in plain
     assert ("These leads come from public license filings. "
             "Nothing has contacted these businesses." in plain)
-    for snippet in ("Nightclubs (A): 3", "By market: Houston 3",
+    for snippet in ("Nightclubs, lounges and ticketed venues (A): 3", "By market: Houston 3",
                     "All 2 sources checked in normally."):
         assert snippet in html_body
 

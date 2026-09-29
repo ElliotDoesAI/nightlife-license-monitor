@@ -2,6 +2,7 @@
 
 Collects public liquor-license application records every day from official
 sources, keeps the ones that look like new or changing bars, clubs, lounges,
+ticketed venues (comedy, live music, sports, theaters, event venues),
 restaurants and taprooms in major nightlife metros, and puts them in a review
 queue. It emails the owner the day's list. It never contacts a business. See
 `nightlife_liquor_license_monitor_prd.md`.
@@ -52,7 +53,9 @@ point at ABC's public license lookup page for a human to open.
    venue kind, defined in AGENTS.md) and a plain reason. Every record also
    gets a stage (Licensed, Approved, In review, Received) from its source's
    own status wording, and qualified leads get a 0 to 100 lead score and a
-   Hot label (tier A, score 75 or more). The points table is in AGENTS.md.
+   Hot label (tier A, not adult, score 75 or more). A is nightclubs, lounges
+   and ticketed venues (comedy, live music, sports, theaters, event venues);
+   adult venues are marked but never Hot. The points table is in AGENTS.md.
 6. Qualified new or changed records are queued. A change whose stage moves
    up is marked in `record_events.changes` and shows as "Stage advanced".
    A source's very first run is a
@@ -64,7 +67,8 @@ point at ABC's public license lookup page for a human to open.
    no lead details). It sends on empty days too (heartbeat) and skips itself when the SMTP
    secrets are not set. `licmon email --preview DIR` writes the message to
    files instead of sending.
-9. `licmon attio-sync --write` adds the day's Hot and A venues to the Attio
+9. `licmon attio-sync --write` adds the day's Hot and A venues, and B venues
+   scoring `ATTIO_MIN_B_SCORE` (60) or more, never adult ones, to the Attio
    "License Leads" list on the Targets object (reusing a Target with the
    same name, else making a minimal one), and `licmon slack` pings the team's Slack
    channel when there is a new or stage-advanced lead. Both skip themselves
@@ -148,7 +152,8 @@ scripts/             package_for_client.sh builds the handover zip
    password), `LEADS_EMAIL_TO`, optional `LEADS_EMAIL_FROM`; variables
    `SMTP_HOST` / `SMTP_PORT` default to `smtp.gmail.com` / `587`.
    Attio and Slack (optional): secrets `ATTIO_API_KEY`, `SLACK_WEBHOOK_URL`;
-   variables `ATTIO_DAILY_CAP`, `ATTIO_LEADS_URL`, `HOT_MIN_SCORE`. Run
+   variables `ATTIO_DAILY_CAP` (50), `ATTIO_MIN_B_SCORE` (60), `ATTIO_LEADS_URL`,
+   `HOT_MIN_SCORE` (75). Run
    `licmon attio-setup --write` once first (see AGENTS.md).
 4. Actions → `daily-collect` → Run workflow, once, to take the baseline.
 5. It then runs daily at 15:30 UTC.

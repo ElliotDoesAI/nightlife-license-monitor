@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS records (
 -- Lead ranking (qualify.py). Added after launch; safe to re-run.
 ALTER TABLE records ADD COLUMN IF NOT EXISTS stage TEXT;        -- Licensed | Approved | In review | Received
 ALTER TABLE records ADD COLUMN IF NOT EXISTS lead_score INTEGER; -- 0 to 100
-ALTER TABLE records ADD COLUMN IF NOT EXISTS hot BOOLEAN;        -- tier A and lead_score >= HOT_MIN_SCORE
+ALTER TABLE records ADD COLUMN IF NOT EXISTS hot BOOLEAN;        -- tier A, not adult, lead_score >= HOT_MIN_SCORE
+ALTER TABLE records ADD COLUMN IF NOT EXISTS adult BOOLEAN;      -- adult entertainment: never Hot, Attio or Slack
 CREATE INDEX IF NOT EXISTS records_queue_idx ON records (qualified, review_status, metro);
 CREATE INDEX IF NOT EXISTS records_venue_idx ON records (venue_key);
 
@@ -131,7 +132,8 @@ SELECT
     -- New columns go at the end: CREATE OR REPLACE VIEW can only append.
     r.stage,
     r.lead_score,
-    r.hot
+    r.hot,
+    r.adult
 FROM record_events e
 JOIN records r ON r.id = e.record_id
 WHERE e.queued;
@@ -171,6 +173,7 @@ SELECT
                                          WHEN 'In review' THEN 2 WHEN 'Received' THEN 1
                                          ELSE 0 END DESC, record_id))[1] AS stage,
     max(lead_score) AS lead_score,
-    coalesce(bool_or(hot), false) AS hot
+    coalesce(bool_or(hot), false) AS hot,
+    coalesce(bool_or(adult), false) AS adult
 FROM review_queue
 GROUP BY queue_date, venue_key;

@@ -1,12 +1,14 @@
 ---
 name: attio-sync
-description: Set up the Attio "License Leads" list on Targets once, or push the day's Hot and A leads into Attio (dry run first). Use when the owner asks about Attio, wants leads in the CRM, asks what would go to Attio, or the "Sync to Attio" step failed.
+description: Set up the Attio "License Leads" list on Targets once, or push the day's Hot, A and strong B leads into Attio (dry run first). Use when the owner asks about Attio, wants leads in the CRM, asks what would go to Attio, or the "Sync to Attio" step failed.
 ---
 
 # Attio: the License Leads list
 
 The daily run calls `licmon attio-sync --write` after the email. It sends
-only the day's **Hot and A** venues to Attio. Attio is the owner's internal
+the day's **Hot and A** venues, plus **B** venues with a score of at least
+`ATTIO_MIN_B_SCORE` (default 60), to Attio. Adult venues (marked "(adult)"
+in the spreadsheet) are never sent. Attio is the owner's internal
 CRM: nothing here contacts a business. Ask the owner before any `--write`.
 
 ## How it fits in Attio
@@ -15,7 +17,7 @@ CRM: nothing here contacts a business. Ask the owner before any `--write`.
   (`target_client`).
 - It is also added to a list named **License Leads** (`license_leads`) that
   sits on Targets. All the lead details live on the list entry: Venue key,
-  Priority, Score, Stage, Market, State, Address, Owner / company, Phone,
+  Priority (Hot, A or B), Score, Stage, Market, State, Address, Owner / company, Phone,
   License, Filing type, Filed on, First seen, Official record, Map, Google,
   Instagram (links are text: Attio has no link type), and the team's Status
   (New, Moved to Targets, Not a fit, Contacted).
@@ -26,7 +28,15 @@ Why a list and not its own object: the Attio plan is at its object limit
 
 ## What the daily sync does
 
-For each Hot and A venue, highest score first:
+First, before anything is written, it checks the list's Priority field has
+the options Hot, A and B and adds any that is missing (the live list was
+made with Hot and A only, so the first run adds B). Adding one needs
+`list_configuration:read-write`. If the key cannot, Hot and A still go, B
+leads wait, and the log says "B leads held back N". Fix it once from the
+owner's Mac with `ATTIO_WRITE_API_KEY` loaded (see "The API key"): run
+`uv run licmon attio-sync --write` (owner's OK first).
+
+Then, for each venue, highest score first:
 
 1. **Already in the list** (same Venue key): only its Stage, Score and
    Priority are updated. The team's Status is never touched.
@@ -38,7 +48,7 @@ For each Hot and A venue, highest score first:
    in Attio.
 3. The venue is added to the list with all its details and Status **New**.
 
-At most `ATTIO_DAILY_CAP` new Targets a day (default 25). Reused Targets and
+At most `ATTIO_DAILY_CAP` new Targets a day (default 50). Reused Targets and
 updates do not count. Venues over the limit are skipped and stay in the
 spreadsheet; Slack says how many. Logs show counts only.
 
@@ -54,7 +64,7 @@ integration, Scopes):
 | `list_configuration:read` | read the list during sync |
 | `record_permission:read-write` | find Targets by name and create new ones |
 | `object_configuration:read` | read the Targets fields and options |
-| `list_configuration:read-write` | only for the one-time `attio-setup` |
+| `list_configuration:read-write` | the one-time `attio-setup`, and adding a missing Priority option (B) |
 
 If `attio-setup --write` fails with `HTTP 403`, the key cannot create lists.
 The owner makes one that can (same Developers page) and you load it as
@@ -100,7 +110,8 @@ Pipe it from `~/.env` so it is never shown or typed into chat:
 
 ```bash
 grep -E '^ATTIO_API_KEY=' ~/.env | cut -d= -f2- | tr -d '"' | gh secret set ATTIO_API_KEY --env production
-gh variable set ATTIO_DAILY_CAP --env production --body 25        # optional
+gh variable set ATTIO_DAILY_CAP --env production --body 50        # optional
+gh variable set ATTIO_MIN_B_SCORE --env production --body 60      # optional
 gh variable set ATTIO_LEADS_URL --env production --body "<License Leads list URL from the browser>"  # optional, Slack links to it
 ```
 
@@ -110,6 +121,7 @@ Errors show the HTTP number and Attio's reason word, never lead details.
 
 | Log says | Meaning / fix |
 |---|---|
+| `B leads held back N` | The list has no B priority option and the key cannot add one. See the first step under "What the daily sync does". |
 | `attio sync skipped (not configured)` | `ATTIO_API_KEY` secret missing. Set it as above. |
 | `attio failed (HTTP 401 ...)` | Wrong or revoked key. Replace the secret. |
 | `attio failed (HTTP 403 ...)` | The key lacks a scope in the table above. `billing_error` on setup means the plan does not allow that list access setting. |

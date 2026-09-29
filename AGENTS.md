@@ -20,8 +20,8 @@ It runs by itself every day at 15:30 UTC on GitHub Actions
 (`.github/workflows/daily.yml`, workflow name `daily-collect`). It writes to a
 private Neon Postgres database (project `tiny-truth-43995411`, branch
 `production`). When the email secrets are set, the same run then emails the
-owner that day's leads with a spreadsheet attached, sends the day's Hot and A
-venues to the "License Leads" list in Attio, and pings the team's Slack
+owner that day's leads with a spreadsheet attached, sends the day's Hot, A
+and strong B venues to the "License Leads" list in Attio, and pings the team's Slack
 channel. Each of those three steps skips itself until its settings exist.
 Nobody has to start it.
 
@@ -86,15 +86,32 @@ export DATABASE_URL="$(neon cs production --project-id tiny-truth-43995411 --ssl
 | "Push the leads to Attio" / "what would go to Attio?" | Dry run first: `uv run licmon attio-sync` (counts only, writes nothing). Real write only with the owner's OK: `uv run licmon attio-sync --write`. Add `--date 2026-10-01` for another day. Skill `attio-sync`. |
 | "Set up Attio" | Once, skill `attio-sync`: `uv run licmon attio-setup` (dry run), then `--write` with the owner's OK. |
 | "Test the Slack ping" / "set up Slack" | Skill `slack-setup`. Preview on this Mac: `uv run licmon slack --preview` (prints, posts nothing). A real post only with the owner's OK. |
-| "Only Hot leads" / "make fewer or more leads Hot" | Hot = tier A with a score of 75 or more. Filter the Hot column, or change the threshold without code: `gh variable set HOT_MIN_SCORE --env production --body 80`, then `uv run licmon requalify` with the same `HOT_MIN_SCORE` set locally (skill `tune-tiers`). |
+| "Only Hot leads" / "make fewer or more leads Hot" | Hot = tier A (not adult) with a score of 75 or more. Filter the Hot column, or change the threshold without code: `gh variable set HOT_MIN_SCORE --env production --body 80`, then `uv run licmon requalify` with the same `HOT_MIN_SCORE` set locally (skill `tune-tiers`). |
 
-The owner sells event ticketing (Speakeasy), so the tier is the kind of venue:
-**A** = nightclubs and lounges, **B** = obvious bars and event venues (tavern,
-pub, taproom, brewery, comedy, live music, event center), **C** = restaurants.
+The owner sells event ticketing, table and VIP reservations and POS
+(Speakeasy), so the tier is the kind of venue:
+
+- **A** = nightclubs, lounges and ticketed venues (comedy, live music,
+  sports, theaters, event venues): club and lounge names, `TICKETED_WORDS`
+  (comedy, improv, stadium, arena, ballpark, speedway, amphitheater,
+  theater, playhouse, concert, music hall, ballroom, event center, rooftop,
+  supper club, cabaret, fairgrounds, convention center and more), or a
+  ticketed-venue license (list below). A stadium concessionaire (Levy,
+  Aramark, Delaware North, Sodexo Live, Legends, Centerplate, Spectra, Oak
+  View Group, ASM Global, Live Nation, AEG) filing for a named stadium,
+  arena or venue is A too; they are never dropped as chains.
+- **B** = obvious bars and not-quite-ticketed venues: tavern, pub, taproom,
+  brewery, karaoke and KTV, billiards, bowling, cinemas. A restaurant name
+  never reaches A: "Restaurant & Lounge" or "Sushi & KTV Lounge" is B.
+- **C** = restaurants.
+
 Coffee shops, bakeries, dessert shops and national chains are dropped. The
 business name decides most of it, because licenses rarely tell a bar from a
-restaurant. A Chicago public place of amusement (PPA) license on a bar or
-event name moves it to A. Rules live in
+restaurant. A Chicago public place of amusement (PPA) license adds points
+but does not move a bar to A by itself (bowling alleys and arcades hold
+them too). Adult venues (gentlemen's clubs, strip clubs, topless bars) keep
+their tier and score but are marked "(adult)" in Business type: never Hot,
+never sent to Attio, never named in Slack. Rules live in
 `src/licmon/qualify.py`; target metros in `src/licmon/metros.py`.
 
 Every lead also gets a **Score** from 0 to 100 (how good a ticketing fit it
@@ -103,12 +120,15 @@ is) and a **Stage** (Licensed, Approved, In review, Received):
 | Part | Points |
 |---|---|
 | Venue type | A 45, B 25, C 5 |
-| Nightlife license (highest counts) | Chicago PPA 20; late hours (TX `LH`, Chicago Late Hour) 15; CA 48 public premises or 90 music venue 15; NY night club or cabaret 15; FL full-liquor bar (blank-modifier quota license) 10 |
+| Nightlife license (highest counts) | Chicago PPA 20; late hours (TX `LH`, Chicago Late Hour) 15; CA 48 public premises 15; music venue or concert hall (CA 90, NY) 15; night club or cabaret (NY, WA) 15; theater or performing arts (CA 64/69/71/72, NY legitimate theatre, WA theater or nonprofit arts, FL 11PA) 15; stadium, arena or sports venue (NY athletic/stadium venues, WA sports entertainment facility, FL 12RT pari-mutuel) 15; civic or event center (FL SCX/SCF/EVNT/DEV) 10; FL full-liquor bar (blank-modifier quota license) 10 |
 | Stage | Licensed 25, Approved 20, In review 10, Received 5 (Florida: only if issued in the last 60 days) |
 | Filing type | new filing or new location 10; change of owner 5 |
 
-**Hot** = tier A with a score of at least `HOT_MIN_SCORE` (default 75). Hot
-is a label on top of A/B/C, not a fourth tier. Each source maps its own
+**Hot** = tier A, not adult, with a score of at least `HOT_MIN_SCORE`
+(default 75). Hot is a label on top of A/B/C, not a fourth tier. Every
+license in the list above except PPA, late hours, public premises and
+full-liquor bar also makes an unclear name A (a restaurant, cinema or
+bowling name stays B). Each source maps its own
 status wording to a stage and names its nightlife licenses
 (`Source.stage` and `Source.nightlife_license` in `src/licmon/sources/`);
 the points table is shared (`src/licmon/qualify.py`). A filing whose stage
@@ -155,7 +175,8 @@ After the email, the workflow runs `licmon attio-sync --write` and then
 `licmon slack`. Both skip themselves (run stays green) until their secret is
 set, and both log counts only.
 
-- **Attio** gets only the day's Hot and A venues. Each one is a record in
+- **Attio** gets the day's Hot and A venues plus B venues with a score of at
+  least `ATTIO_MIN_B_SCORE` (default 60). Adult venues never go. Each one is a record in
   the existing **Targets** object, added to a list named "License Leads"
   (api slug `license_leads`) that sits on Targets. All the lead details
   (venue key, priority, score, stage, market, address, owner, phone,
@@ -167,22 +188,29 @@ set, and both log counts only.
   Target is made with just the name, client type Venue and status
   Prespecting (Attio's own spelling). The team's **Status** on the list
   (New, Moved to Targets, Not a fit, Contacted) starts at New and is never
-  overwritten. At most `ATTIO_DAILY_CAP` (default 25) new Targets a day,
-  highest score first; the rest stay in the spreadsheet. The list is
+  overwritten. At most `ATTIO_DAILY_CAP` (default 50) new Targets a day,
+  highest score first; the rest stay in the spreadsheet. The list's
+  Priority field has Hot, A and B; before its first write each day the sync
+  adds any of those that is missing (the live list was made with Hot and A).
+  Adding one needs `list_configuration:read-write`. If the daily key lacks it,
+  Hot and A still go, B leads wait, and the log says "B leads held back". Fix
+  once on the owner's Mac: run `uv run licmon attio-sync --write` with
+  `ATTIO_WRITE_API_KEY` loaded (owner's OK first), which adds the B option. The list is
   created once with `licmon attio-setup --write` (skill `attio-sync`). It
   only creates new things and stops if the list exists.
 - **Slack** posts only when the day has a new filing or a stage-advanced
   lead: counts (Hot, A, B, C), up to five Hot venue names with city and
-  stage, how many went to Attio, and a link to the Attio list. No addresses,
-  phones or owners. Skill `slack-setup`.
+  stage (never an adult venue), how many went to Attio and how many of those
+  are B, and a link to the Attio list. No addresses, phones or owners. Skill `slack-setup`.
 
 | Name | Kind | Value |
 |---|---|---|
 | `ATTIO_API_KEY` | secret | Attio API key; needs `list_entry:read-write`, `list_configuration:read`, `record_permission:read-write` and `object_configuration:read` (plus `list_configuration:read-write` for `attio-setup`) |
-| `ATTIO_DAILY_CAP` | variable, optional | most new Targets Attio gets per day, default `25` |
+| `ATTIO_DAILY_CAP` | variable, optional | most new Targets Attio gets per day, default `50` |
+| `ATTIO_MIN_B_SCORE` | variable, optional | lowest score a tier B venue needs to go to Attio, default `60` |
 | `ATTIO_LEADS_URL` | variable, optional | the License Leads page URL copied from the Attio browser tab, linked from Slack |
 | `SLACK_WEBHOOK_URL` | secret | Slack incoming webhook URL (the channel is picked when it is made) |
-| `HOT_MIN_SCORE` | variable, optional | score a tier A lead needs to be Hot, default `75` |
+| `HOT_MIN_SCORE` | variable, optional | score a tier A lead (not adult) needs to be Hot, default `75` |
 
 Changing `HOT_MIN_SCORE` affects records scored from the next run on; run
 `uv run licmon requalify` (with the same value set locally) to re-label
@@ -212,6 +240,8 @@ stored records.
   days with no commits. The workflow's `keepalive` job prevents this by pushing
   an empty commit after 45 quiet days. If it happened anyway:
   `gh workflow enable daily-collect`.
+- **Attio says "B leads held back".** The list has no B priority option and
+  the daily key cannot add one. See "Attio and Slack" above.
 - **Attio step red.** `attio failed (HTTP 401)` or `(HTTP 403)`: the key is
   wrong or lacks a scope (see "Attio and Slack"). The word after the number
   is Attio's reason, for example `quota_exceeded` (the Attio plan's limit).

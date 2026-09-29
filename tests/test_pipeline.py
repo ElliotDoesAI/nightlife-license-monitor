@@ -41,7 +41,7 @@ class FakeSource(Source):
                          license_type="MB", license_description="Mixed Beverage Permit",
                          application_type="ORIGINAL", status=row.get("status", "Received"),
                          application_date=date.fromisoformat(row["date"]),
-                         address="1 Test St", city="Austin", state="TX",
+                         address=row.get("address", "1 Test St"), city="Austin", state="TX",
                          zip="78701", county=row.get("county", "Travis"),
                          category=row.get("category", "on_premise"), raw=row)
 
@@ -243,3 +243,39 @@ def test_stage_advanced_label_and_view_columns(pg):
                     (DAY2.date(),))
         assert cur.fetchone() == ("Approved", 75, True)
     db.init_schema(pg)  # schema.sql re-runs cleanly on an existing database
+
+
+def test_adult_flag_stored_in_views_and_sheet(pg, monkeypatch):
+    from licmon import cli, leadsheet
+
+    monkeypatch.setenv("HOT_MIN_SCORE", "0")
+    rows = [{"id": "40", "name": "Fake Gentlemen's Club LLC", "date": "2026-08-31"},
+            {"id": "41", "name": "Fake Velvet Lounge LLC", "date": "2026-08-31",
+             "address": "2 Test St"}]
+    pipeline.run([FakeSource(rows)], conn=pg, http=object(), now=DAY1)
+    with pg.cursor() as cur:
+        cur.execute("SELECT source_record_id, tier, hot, adult FROM records ORDER BY 1")
+        assert cur.fetchall() == [("40", "A", False, True), ("41", "A", True, False)]
+        cur.execute("SELECT adult FROM review_queue ORDER BY source_record_id")
+        assert [r[0] for r in cur.fetchall()] == [True, False]
+        cur.execute("SELECT legal_name, adult FROM daily_leads ORDER BY 1")
+        assert [r[1] for r in cur.fetchall()] == [True, False]
+        cur.execute("UPDATE records SET adult=NULL")  # rows stored before the flag
+    pg.commit()
+    [adult, lounge] = sorted(leadsheet.load_rows(pg, DAY1.date()),
+                             key=lambda r: r["business_name"])
+    assert adult["adult"] is False  # NULL until requalify
+    class KeepOpen:
+        def __enter__(self):
+            return pg
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(cli.db, "connect", KeepOpen)
+    assert cli.main(["requalify"]) == 0
+    [adult, lounge] = sorted(leadsheet.load_rows(pg, DAY1.date()),
+                             key=lambda r: r["business_name"])
+    assert adult["adult"] is True and adult["business_type"].endswith("(adult)")
+    assert not adult["hot"] and lounge["hot"] == "Hot" and not lounge["adult"]
+    db.init_schema(pg)

@@ -88,6 +88,16 @@ PRIVILEGE_CODES = {
 }
 
 
+# License-type wording -> qualify.NIGHTLIFE_LICENSE_POINTS keys. Seen in the
+# report (probe, 2026-09-29): "NIGHTCLUB", "SPORTS ENTERTAINMENT FACILITY",
+# "BEER/WINE THEATER", "NON-PROFIT ARTS ORGANIZATION".
+_NIGHTLIFE_TYPES = (
+    (re.compile(r"NIGHTCLUB|NIGHT CLUB|CABARET"), "nightclub_cabaret"),
+    (re.compile(r"SPORTS ENTERTAINMENT|SPORTS/ENTERTAINMENT"), "sports_venue"),
+    (re.compile(r"THEATER|THEATRE|NON-PROFIT ARTS"), "theater"),
+)
+
+
 def _part_category(part: str) -> str:
     """Classify one ';'-separated license-type fragment."""
     if part in PRIVILEGE_CODES:
@@ -343,6 +353,10 @@ class WaLcbSource(Source):
         # The report section: approved in this report means issued.
         return {_APPLICATION: stage.RECEIVED, _APPROVED: stage.LICENSED}.get(
             (rec.status or "").upper())
+
+    def nightlife_license(self, rec: Record) -> tuple[str, ...]:
+        text = (rec.license_description or rec.license_type or "").upper()
+        return tuple(key for pattern, key in _NIGHTLIFE_TYPES if pattern.search(text))
 
     def contact(self, raw: dict) -> dict:
         people = "; ".join(

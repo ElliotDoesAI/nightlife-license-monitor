@@ -32,7 +32,7 @@ COLUMNS: list[tuple[str, str, int]] = [
     ("business_name", "Business name", 34),
     ("whats_new", "What's new", 16),
     ("company", "Company / owner", 34),
-    ("business_type", "Business type", 26),
+    ("business_type", "Business type", 32),
     ("filing", "Filing", 18),
     ("stage", "Stage", 11),
     ("filed_on", "Filed on", 12),
@@ -60,7 +60,8 @@ NEW_FILING = "New filing"
 STAGE_ADVANCED = "Stage advanced"
 DETAILS_CHANGED = "Details changed"
 
-# Tier A/B mean nightclub / bar-or-venue (see qualify.py); C is by license.
+# Tier A/B mean nightclub or ticketed venue / bar-or-venue (see qualify.py);
+# C is by license.
 BUSINESS_TYPES = {
     "nightlife": "Restaurant / bar",
     "on_premise": "Restaurant",
@@ -81,13 +82,20 @@ _FILINGS = [
 ]
 
 
-def _business_type(priority: str, cats: list) -> str:
+#: Added to Business type for adult venues (qualify.ADULT_WORDS). They stay in
+#: the spreadsheet but never go to Attio or Slack.
+ADULT_NOTE = " (adult)"
+
+
+def _business_type(priority: str, cats: list, adult: bool = False) -> str:
     if priority == "A":
-        return "Nightclub / lounge"
-    if priority == "B":
-        return ("Brewery / taproom" if cats and cats[0] == "hospitality_mfg"
+        kind = "Nightclub / lounge / ticketed venue"
+    elif priority == "B":
+        kind = ("Brewery / taproom" if cats and cats[0] == "hospitality_mfg"
                 else "Bar / event venue")
-    return BUSINESS_TYPES.get(cats[0], "Other") if cats else "Other"
+    else:
+        kind = BUSINESS_TYPES.get(cats[0], "Other") if cats else "Other"
+    return kind + (ADULT_NOTE if adult else "")
 
 
 def _search(base: str, query: str) -> str | None:
@@ -192,7 +200,7 @@ SELECT q.queue_date, q.record_id, q.venue_key, q.tier, q.score, q.legal_name,
        q.application_date, q.address, q.city, q.state, q.zip, q.metro,
        q.source, q.source_url, r.category, r.raw, q.event_type, q.changes,
        q.review_status, q.stage, q.lead_score, q.hot, q.license_type,
-       q.first_seen_at
+       q.first_seen_at, q.adult
 FROM review_queue q JOIN records r ON r.id = q.record_id
 WHERE r.qualified
   AND (%(day)s::date IS NULL OR q.queue_date = %(day)s)
@@ -203,7 +211,7 @@ _FIELDS = ["queue_date", "record_id", "venue_key", "tier", "score", "legal_name"
            "license_description", "application_type", "status", "application_date",
            "address", "city", "state", "zip", "metro", "source", "source_url",
            "category", "raw", "event_type", "changes", "review_status", "stage",
-           "lead_score", "hot", "license_type", "first_seen_at"]
+           "lead_score", "hot", "license_type", "first_seen_at", "adult"]
 
 
 def load_rows(conn, day: date | None, open_only: bool = False) -> list[dict]:
@@ -251,11 +259,13 @@ def group_records(records: list[dict]) -> list[dict]:
             "score": top.get("score") or 0,
             "lead_score": max((r.get("lead_score") or 0) for r in recs),
             "hot": "Hot" if any(r.get("hot") for r in recs) else "",
+            "adult": any(r.get("adult") for r in recs),
             "whats_new": _whats_new(recs),
             "first_seen": min(seen) if seen else None,
             "business_name": _title(name),
             "company": _title(company) or None,
-            "business_type": _business_type(min((r.get("tier") or "C") for r in recs), cats),
+            "business_type": _business_type(min((r.get("tier") or "C") for r in recs), cats,
+                                            any(r.get("adult") for r in recs)),
             "filing": _filing(_uniq(r.get("application_type") for r in recs), top["source"]),
             "stage": _stage(recs, by_source),
             "filed_on": min(dates) if dates else None,
@@ -399,12 +409,14 @@ def legend_lines() -> list[tuple[str, str]]:
         ("How scoring works", ""),
         ("", ""),
         ("Score", "0 to 100. Higher means a better ticketing fit. Parts add up."),
-        ("Hot", f"A nightclub or lounge (priority A) with a score of "
-                f"{q.hot_min_score()} or more."),
+        ("Hot", f"A priority A venue with a score of {q.hot_min_score()} or more. "
+                "Adult venues are never Hot."),
         ("", ""),
         ("Venue type", "Points"),
-        ("A: nightclub or lounge", q.TIER_POINTS["A"]),
-        ("B: bar or event venue", q.TIER_POINTS["B"]),
+        ("A: nightclubs, lounges and ticketed venues (comedy, live music, sports, "
+         "theaters, event venues)", q.TIER_POINTS["A"]),
+        ("B: bars, karaoke, billiards, bowling, cinemas; a lounge on a restaurant",
+         q.TIER_POINTS["B"]),
         ("C: restaurant", q.TIER_POINTS["C"]),
         ("", ""),
         ("Nightlife license (highest one counts)", "Points"),
@@ -426,6 +438,13 @@ def legend_lines() -> list[tuple[str, str]]:
         ("In review", "Past intake, in process."),
         ("Received", "Just filed."),
         ("", ""),
+        ("Labels", ""),
+        ("(adult) in Business type", "Gentlemen's club, strip club or similar. Kept here, "
+                                     "never sent to Attio or named in Slack."),
+        ("Chicago amusement license", "Adds points. A bar name with one stays B."),
+        ("Stadium concessionaire", "A food and drink operator (Levy, Aramark and others) "
+                                   "at a named stadium, arena or venue counts as A."),
+        ("", ""),
         ("What's new", ""),
         (NEW_FILING, "First time this filing showed up."),
         (STAGE_ADVANCED, "A filing we already had moved to a later stage."),
@@ -445,8 +464,8 @@ def _write_legend(ws) -> None:
     ws.title = "How scoring works"
     for label, value in legend_lines():
         ws.append([label, value])
-        if value == "Points" or label in ("How scoring works", "Stages", "What's new",
-                                           "Tabs"):
+        if value == "Points" or label in ("How scoring works", "Stages", "Labels",
+                                           "What's new", "Tabs"):
             ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
             ws.cell(row=ws.max_row, column=2).font = Font(bold=True)
     ws.column_dimensions["A"].width = 52

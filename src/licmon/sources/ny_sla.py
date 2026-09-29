@@ -66,6 +66,20 @@ _CATEGORY_WORDS = [
 ]
 
 
+# Description wording -> qualify.NIGHTLIFE_LICENSE_POINTS keys. Seen in the
+# dataset (probe, 2026-09-29): "Night Club", "Cabaret", "Legitimate Theatre",
+# "Summer Concert Hall", "Athletic/Sporting Event/Expositions/Large Gathering
+# Venue", "Outdoor Athletic Fields and Stadiums" (and Summer variants).
+# "Club" / "For-Profit Club" are membership clubs, not ticketed: left out.
+# "Catering Establishment" (banquet halls) is a B license in qualify.py.
+_NIGHTLIFE_DESCRIPTIONS = (
+    (re.compile(r"NIGHT ?CLUB|CABARET"), "nightclub_cabaret"),
+    (re.compile(r"CONCERT HALL"), "music_venue"),
+    (re.compile(r"LEGITIMATE THEAT"), "theater"),
+    (re.compile(r"STADIUM|ATHLETIC|SPORTING EVENT|LARGE GATHERING|ARENA"), "sports_venue"),
+)
+
+
 def categorize(description: str | None) -> str:
     text = (description or "").lower()
     for word, category in _CATEGORY_WORDS:
@@ -92,7 +106,7 @@ class NySlaSource(Source):
 
     def nightlife_license(self, rec: Record) -> tuple[str, ...]:
         text = (rec.license_description or "").upper()
-        return ("nightclub_cabaret",) if re.search(r"NIGHT ?CLUB|CABARET", text) else ()
+        return tuple(key for pattern, key in _NIGHTLIFE_DESCRIPTIONS if pattern.search(text))
 
     def fetch(self, http: Http) -> list[Snapshot]:
         return socrata.fetch_all(http, DOMAIN, DATASET, order="application_id")

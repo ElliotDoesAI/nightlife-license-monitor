@@ -180,11 +180,11 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                         metro=%s, venue_key=%s, material_hash=%s, raw=%s, last_seen_at=%s,
                         last_changed_at=%s, removed_at=NULL, last_snapshot_id=%s,
                         qualified=%s, score=%s, tier=%s, qualify_reason=%s,
-                        stage=%s, lead_score=%s, hot=%s
+                        stage=%s, lead_score=%s, hot=%s, adult=%s
                         WHERE id=%s""",
                     _values(rec) + [metro, venue_key(rec), rec.material_hash(mfields),
                                     db.jsonb(rec.raw), now, now, snap_id, q.qualified, q.score, q.tier, q.reason,
-                                    q.stage, q.lead_score, q.hot, old["id"]])
+                                    q.stage, q.lead_score, q.hot, q.adult, old["id"]])
                 events.append((old["id"], sr_id, "changed", now, db.jsonb(changes),
                                q.qualified))
             else:
@@ -195,19 +195,19 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                         "WHERE id = ANY(%s)", (now, snap_id, touched))
 
         if inserts:
-            placeholders = ", ".join(["%s"] * (len(RECORD_COLUMNS) + 20))
+            placeholders = ", ".join(["%s"] * (len(RECORD_COLUMNS) + 21))
             cur.executemany(
                 f"""INSERT INTO records (source, source_record_id,
                     {', '.join(RECORD_COLUMNS)}, metro, venue_key, material_hash, raw,
                     first_seen_at, last_seen_at, last_changed_at, first_snapshot_id,
                     last_snapshot_id, qualified, score, tier, qualify_reason,
-                    review_status, review_notes, stage, lead_score, hot)
+                    review_status, review_notes, stage, lead_score, hot, adult)
                     VALUES ({placeholders}) RETURNING source_record_id, id""",
                 [[rec.source, rec.source_record_id] + _values(rec)
                  + [metro, venue_key(rec), rec.material_hash(mfields), db.jsonb(rec.raw),
                     now, now, now,
                     snap_id, snap_id, q.qualified, q.score, q.tier, q.reason, "new", None,
-                    q.stage, q.lead_score, q.hot]
+                    q.stage, q.lead_score, q.hot, q.adult]
                  for rec, metro, q, _, _ in inserts],
                 returning=True)
             # Map ids by key rather than trusting result-set order.

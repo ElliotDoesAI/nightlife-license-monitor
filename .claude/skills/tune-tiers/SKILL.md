@@ -9,18 +9,31 @@ Rules are deterministic word lists in two files:
 
 - `src/licmon/qualify.py`: whether a filing qualifies (target metro,
   license category points, application type, routine renewals dropped) and
-  which tier it gets. The owner sells event ticketing, so the tier is the
-  venue kind, mostly from the business name: `NIGHTCLUB_WORDS` /
-  `NIGHTCLUB_LICENSES` = A (nightclubs, lounges); `BAR_VENUE_WORDS` /
-  `BAR_VENUE_LICENSES` = B (bars, event venues); everything else that
-  qualifies = C (restaurants). `FOOD_BAR` and `RESTAURANT_WORDS` stop "sushi
-  bar" or "bar & grill" from counting as bars. `DROP_WORDS` (coffee,
-  bakery, dessert...) and `CHAINS` (national chains, matched at the start of
-  the name) remove a lead. Scores add license-category points, filing points
-  (`APPLICATION_TYPE_POINTS`), and tier bonus (A 60 / B 30 / C 0). Add a word
-  to the right list to move leads. A Chicago PPA license on a bar or event
-  name moves B to A (`PPA_NOT_NIGHTLIFE` keeps bowling alleys and theaters
-  at B).
+  which tier it gets. The owner sells event ticketing, table and VIP
+  reservations and POS, so the tier is the venue kind, mostly from the
+  business name (all in `venue_class`):
+  - A (nightclubs, lounges and ticketed venues): `NIGHTCLUB_WORDS`,
+    `TICKETED_WORDS` (comedy, stadium, arena, theater, concert, event
+    center, rooftop, supper club...), a license key in `TICKETED_LICENSES`
+    (nightclub, music venue, theater, sports venue, event center; each
+    source sets these in `nightlife_license`), or `CONCESSIONAIRES` (Levy,
+    Aramark, Delaware North...) with a ticketed word or
+    `CONCESSION_VENUE_WORDS` (Field, Park, Center...) in the name.
+  - B (bars and not-quite-ticketed venues): `BAR_VENUE_WORDS` /
+    `BAR_VENUE_LICENSES`. `NOT_TICKETED` (cinema, movie, bowling, arcade,
+    billiards...) keeps a name at B even with a ticketed word or license.
+    A restaurant name (`RESTAURANT_WORDS`, `DROP_WORDS`) never reaches A:
+    a lounge, ticketed word or ticketed license on it gives B.
+  - C: everything else that qualifies (restaurants).
+  `FOOD_BAR` stops "sushi bar" or "bar & grill" from counting as bars.
+  `DROP_WORDS` (coffee, bakery, dessert...) and `CHAINS` (national chains,
+  matched at the start of the name) remove a lead. Scores add
+  license-category points, filing points (`APPLICATION_TYPE_POINTS`), and
+  tier bonus (A 60 / B 30 / C 0). Add a word to the right list to move
+  leads. A Chicago PPA license adds lead-score points but does not lift a
+  bar to A. `ADULT_WORDS` (gentlemen's club, strip club, topless, bikini
+  bar, adult cabaret...) sets the `adult` flag: tier and score stay, but it
+  is never Hot, never sent to Attio and never named in Slack.
 - **Lead score** (0 to 100, the Score column; ranks leads, does not decide
   whether something is a lead), also in `qualify.py`: `TIER_POINTS`
   (A 45 / B 25 / C 5), `NIGHTLIFE_LICENSE_POINTS` (highest one counts),
@@ -31,10 +44,11 @@ Rules are deterministic word lists in two files:
   in each source's `nightlife_license` and `stage` methods
   (`src/licmon/sources/<file>.py`); Florida's 60-day window is
   `LICENSED_FRESH_DAYS` in `fl_abt.py`.
-- **Hot** = tier A with a score of at least `HOT_MIN_SCORE` (default 75).
+- **Hot** = tier A, not adult, with a score of at least `HOT_MIN_SCORE` (default 75).
   To change it without code:
   `gh variable set HOT_MIN_SCORE --env production --body 80`. Attio's daily
-  cap is `ATTIO_DAILY_CAP` the same way (default 25).
+  cap is `ATTIO_DAILY_CAP` the same way (default 50), and the lowest score a
+  B lead needs to go to Attio is `ATTIO_MIN_B_SCORE` (default 60).
 - `src/licmon/metros.py`: which counties (or cities) make up each metro.
 
 Steps:
@@ -54,8 +68,10 @@ Steps:
    ```
 
 3. Edit the rule. Add or update a case in `tests/test_rules.py` (tiers) or
-   `tests/test_stage_score.py` (score, stage, Hot) that pins the new
-   behavior (synthetic names only). Run the tests on the disposable
+   `tests/test_stage_score.py` (score, stage, Hot, per-source license keys)
+   that pins the new behavior (synthetic names only). A new license key
+   needs a line in `NIGHTLIFE_LICENSE_POINTS` (and `TICKETED_LICENSES` if it
+   should make a venue A). Run the tests on the disposable
    database (AGENTS.md, "Developing").
 4. Re-score stored records:
 

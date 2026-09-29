@@ -63,7 +63,7 @@ jobs:
           LEADS_EMAIL_TO: ${{ secrets.LEADS_EMAIL_TO }}
           HOT_MIN_SCORE: ${{ vars.HOT_MIN_SCORE || '75' }}
         run: uv run licmon email
-      # Adds today's Hot and A venues to the Attio "License Leads" list on
+      # Adds today's Hot, A and strong B venues (never adult) to the Attio "License Leads" list on
       # Targets (internal CRM; nothing contacts a business). Skips itself when
       # ATTIO_API_KEY is not set. Logs counts only; the counts file feeds Slack.
       - name: Sync to Attio
@@ -71,7 +71,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ATTIO_API_KEY: ${{ secrets.ATTIO_API_KEY }}
-          ATTIO_DAILY_CAP: ${{ vars.ATTIO_DAILY_CAP || '25' }}
+          ATTIO_DAILY_CAP: ${{ vars.ATTIO_DAILY_CAP || '50' }}
+          ATTIO_MIN_B_SCORE: ${{ vars.ATTIO_MIN_B_SCORE || '60' }}
         run: uv run licmon attio-sync --write --counts "$RUNNER_TEMP/attio-counts.json"
       # Posts a short note to the team's Slack channel when there are new or
       # stage-advanced leads. Skips itself when SLACK_WEBHOOK_URL is not set.

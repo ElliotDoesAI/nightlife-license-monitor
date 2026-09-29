@@ -89,7 +89,69 @@ def test_nightlife_license_per_source():
         rec("n", license_description="On Premises Liquor - Night Club")) == ("nightclub_cabaret",)
     assert FlAbtSource().nightlife_license(rec("f", license_type="4COP")) == ("full_liquor_bar",)
     assert FlAbtSource().nightlife_license(rec("f", license_type="4COP-SFS")) == ()
-    assert WaLcbSource().nightlife_license(rec("w")) == ()  # base default
+    assert WaLcbSource().nightlife_license(rec("w")) == ()
+
+
+def test_ticketed_license_signals_per_source():
+    ca = CaAbcSource()
+    for code in ("64", "69", "71", "72"):
+        assert ca.nightlife_license(rec("a", license_type=f"47,{code}")) == ("theater",), code
+    assert ca.nightlife_license(rec("a", license_type="47")) == ()
+    ny = NySlaSource()
+    assert ny.nightlife_license(rec("n", license_description="Legitimate Theatre")) == ("theater",)
+    assert ny.nightlife_license(rec("n", license_description="Summer Concert Hall")) == (
+        "music_venue",)
+    assert ny.nightlife_license(rec("n", license_description=(
+        "Athletic/Sporting Event/Expositions/Large Gathering Venue"))) == ("sports_venue",)
+    assert ny.nightlife_license(rec("n", license_description=(
+        "Outdoor Athletic Fields and Stadiums"))) == ("sports_venue",)
+    assert ny.nightlife_license(rec("n", license_description="Cabaret")) == ("nightclub_cabaret",)
+    assert ny.nightlife_license(rec("n", license_description="Catering Establishment")) == ()
+    assert ny.nightlife_license(rec("n", license_description="Club")) == ()
+    wa = WaLcbSource()
+    assert wa.nightlife_license(rec("w", license_description=(
+        "SPIRITS/BR/WN REST LOUNGE +; NIGHTCLUB"))) == ("nightclub_cabaret",)
+    assert wa.nightlife_license(rec("w", license_description=(
+        "SPORTS ENTERTAINMENT FACILITY"))) == ("sports_venue",)
+    assert wa.nightlife_license(rec("w", license_description="BEER/WINE THEATER")) == ("theater",)
+    assert wa.nightlife_license(rec("w", license_description=(
+        "NON-PROFIT ARTS ORGANIZATION"))) == ("theater",)
+    assert wa.nightlife_license(rec("w", license_description="SPIRITS/BR/WN REST SERVICE BAR")) == ()
+    fl = FlAbtSource()
+    assert fl.nightlife_license(rec("f", license_type="11PA")) == ("theater",)
+    assert fl.nightlife_license(rec("f", license_type="12RT")) == ("sports_venue",)
+    assert fl.nightlife_license(rec("f", license_type="4COP-SCX")) == ("event_venue",)
+    assert fl.nightlife_license(rec("f", license_type="4COP-SCF")) == ("event_venue",)
+    assert fl.nightlife_license(rec("f", license_type="4COP-EVNT")) == ("event_venue",)
+    assert fl.nightlife_license(rec("f", license_type="4COP-DEV")) == ("event_venue",)
+    assert fl.nightlife_license(rec("f", license_type="4COP-SBX")) == ()  # bowling stays B
+
+
+def test_ticketed_license_makes_an_unclear_name_tier_a():
+    def q(source, dba, **kw):
+        base = dict(application_type="NEW", status="Received", state="CA",
+                    category="nightlife")
+        base.update(kw)
+        return qualify(rec(source, dba=dba, **base), "Los Angeles / Orange County", today=TODAY)
+
+    theater = q("ca_abc_applications", "Fake Holdings", license_type="47,64",
+                license_description="On-Sale General - Eating Place,Special On-Sale General "
+                                    "for Nonprofit Theater Company", application_type=None,
+                status="PEND", category="on_premise")
+    assert theater.tier == "A" and "theater license" in theater.reason
+    music = q("ca_abc_applications", "Fake Holdings", license_type="90",
+              license_description="On-Sale General - Music Venue", application_type=None,
+              status="PEND")
+    assert music.tier == "A"
+    # a restaurant name with a ticketed license is B, a cinema or bowling alley too
+    grill = q("ca_abc_applications", "Fake Grill", license_type="90",
+              license_description="On-Sale General - Music Venue", application_type=None,
+              status="PEND")
+    assert grill.tier == "B"
+    cinema = q("fl_abt_licenses", "Fake Cinemas", license_type="11PA",
+               license_description="Performing arts facility", state="FL",
+               application_type="NEW LICENSE", status="Current", category="catering_event")
+    assert cinema.tier == "B"
 
 
 def test_plan_examples_80_85_60(monkeypatch):
@@ -122,19 +184,25 @@ def test_hot_threshold_is_a_setting(monkeypatch):
     assert not qualify(lounge, "New York City", today=TODAY).hot  # falls back to 75
 
 
-def test_ppa_upgrade_b_to_a_only_for_bar_or_event_names():
-    def tier(dba, license_type="1050"):
+def test_ppa_license_needs_a_club_or_ticketed_name_for_a():
+    def score(dba, license_type="1050"):
         r = rec("chicago_bacp_liquor", dba=dba, license_type=license_type,
                 license_description="Public Place of Amusement", application_type="NEW",
                 status="AAI", state="IL", city="CHICAGO", category="nightlife")
-        return qualify(r, "Chicago", today=TODAY).tier
+        q = qualify(r, "Chicago", today=TODAY)
+        return q.tier, q.lead_score
 
-    assert tier("Fake Cocktail Bar") == "A"
-    assert tier("Fake Event Space") == "A"
-    assert tier("Fake Cocktail Bar", license_type="1470") == "B"  # tavern, no PPA
-    assert tier("Fake Bowling Lanes") == "B"  # bowling alleys hold PPAs too
-    assert tier("Fake Theater Company") == "B"
-    assert tier("Fake Holdings") == "B"  # unclear name: PPA license alone
+    assert score("Fake Event Space")[0] == "A"
+    assert score("Fake Comedy Club")[0] == "A"
+    assert score("Fake Theater Company")[0] == "A"  # theaters are ticketed now
+    assert score("Fake Nightclub")[0] == "A"
+    # a bar name with a PPA is B, but the PPA points rank it high within B
+    assert score("Fake Cocktail Bar") == ("B", 25 + 20 + 25 + 10)
+    assert score("Fake Tavern") == ("B", 25 + 20 + 25 + 10)
+    assert score("Fake Cocktail Bar", license_type="1470") == ("B", 25 + 25 + 10)
+    assert score("Fake Bowling Lanes")[0] == "B"  # bowling alleys hold PPAs too
+    assert score("Fake Holdings")[0] == "B"  # unclear name: PPA license alone
+    assert score("Fake Grill")[0] == "C"  # a restaurant name: PPA does not lift it
 
 
 def test_florida_old_license_scores_no_stage_points():

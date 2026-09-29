@@ -5,8 +5,8 @@ picked when the webhook is made). It posts only when the day has at least one
 new filing or stage-advanced lead; the email still covers quiet days.
 
 The message holds counts plus up to five Hot venue names with city and stage.
-No addresses, phones, owners or record links. It goes to the owner's own
-team channel, never to a business.
+No addresses, phones, owners or record links, and never an adult venue's
+name. It goes to the owner's own team channel, never to a business.
 
 The message text never goes to public Actions logs: callers log counts and
 "posted" / "skipped" / "failed (<ErrorType>)" only.
@@ -47,25 +47,28 @@ def compose(rows: list[dict], attio_counts: dict | None = None,
             attio_url: str | None = None) -> str:
     """The message text. Hot is counted on its own; A means A and not Hot."""
     hot = [r for r in rows if r.get("hot")]
+    named = [r for r in hot if not r.get("adult")]  # adult venues are never named
     buckets = [("Hot", len(hot))] + [
         (tier, sum(1 for r in rows if r.get("priority") == tier and not r.get("hot")))
         for tier in ("A", "B", "C")]
     parts = ", ".join(f"{n} {label}" for label, n in buckets if n)
     lines = [f"New license leads: {len(rows)} today" + (f" ({parts})" if parts else "")]
 
-    if hot:
-        hot = sorted(hot, key=lambda r: -(r.get("lead_score") or 0))
+    if named:
+        named = sorted(named, key=lambda r: -(r.get("lead_score") or 0))
         names = []
-        for r in hot[:MAX_HOT_NAMES]:
+        for r in named[:MAX_HOT_NAMES]:
             where = ", ".join(p for p in (r.get("business_name"), r.get("city")) if p)
             names.append(_esc(where) + (f" ({_esc(r['stage'])})" if r.get("stage") else ""))
-        more = len(hot) - MAX_HOT_NAMES
+        more = len(named) - MAX_HOT_NAMES
         lines.append("Hot: " + " · ".join(names) + (f" · and {more} more" if more > 0 else ""))
 
     tail = []
     if attio_counts:
         added = attio_counts.get("added", attio_counts.get("created", 0)) or 0
-        tail.append(f"Added to Attio: {added} new, {attio_counts.get('updated', 0) or 0} updated")
+        b = attio_counts.get("b") or 0
+        tail.append(f"Added to Attio: {added} new, {attio_counts.get('updated', 0) or 0} updated"
+                    + (f" ({b} B)" if b else ""))
         over = attio_counts.get("skipped", attio_counts.get("over_cap")) or 0
         if over:
             tail.append(f"{over} more over today's Attio limit, in the spreadsheet")

@@ -1,6 +1,7 @@
 """Attio CRM: the "License Leads" list on Targets, and the daily sync into it.
 
-Only Hot and tier A venues go to Attio. Each one becomes (or reuses) a record
+Hot, tier A, and tier B venues with a lead score of at least
+ATTIO_MIN_B_SCORE (default 60) go to Attio. Adult venues never do. Each one becomes (or reuses) a record
 in the workspace's existing Targets object (``target_client``) and gets an
 entry in the "License Leads" list, whose parent object is Targets. All the
 lead detail lives on the list entry, so the Targets object itself is never
@@ -14,7 +15,9 @@ owner's internal CRM: nothing here contacts a business.
   never touched after the entry is made. A new venue reuses a Target with the
   same name (case-insensitive exact match) or creates a minimal one: name,
   client type Venue, status Prespecting. New Targets are capped per day
-  (ATTIO_DAILY_CAP, default 25), highest score first.
+  (ATTIO_DAILY_CAP, default 50), highest score first. Before its first
+  write the sync adds any missing Priority option (the live list was made
+  with Hot and A only, before B leads were sent).
 
 Endpoints and payloads follow the Attio REST API v2 reference
 (docs.attio.com/rest-api/endpoint-reference, checked 2026-09-29). Public
@@ -51,10 +54,12 @@ MATCH_ATTRIBUTE = "venue_key"
 STATUS_ATTRIBUTE = "team_status"
 #: The only entry fields a repeat venue has refreshed.
 UPDATE_FIELDS = ("stage", "score", "priority")
-DEFAULT_DAILY_CAP = 25
+DEFAULT_DAILY_CAP = 50
+#: Tier B venues need at least this lead score to go to Attio.
+DEFAULT_MIN_B_SCORE = 60
 
 STAGE_OPTIONS = ["Licensed", "Approved", "In review", "Received"]
-PRIORITY_OPTIONS = ["Hot", "A"]
+PRIORITY_OPTIONS = ["Hot", "A", "B"]
 STATUS_OPTIONS = ["New", "Moved to Targets", "Not a fit", "Contacted"]
 
 #: List entry attributes: (api_slug, title, type, is_unique, select options).
@@ -111,6 +116,14 @@ def daily_cap() -> int:
                           or DEFAULT_DAILY_CAP))
     except ValueError:
         return DEFAULT_DAILY_CAP
+
+
+def min_b_score() -> int:
+    """Lowest lead score a tier B venue needs to go to Attio (ATTIO_MIN_B_SCORE)."""
+    try:
+        return int(os.environ.get("ATTIO_MIN_B_SCORE", "").strip() or DEFAULT_MIN_B_SCORE)
+    except ValueError:
+        return DEFAULT_MIN_B_SCORE
 
 
 # ---------------------------------------------------------------------------
@@ -240,11 +253,20 @@ def setup(client: Client | None, write: bool) -> list[str]:
 # Sync
 # ---------------------------------------------------------------------------
 
-def candidates(rows: list[dict]) -> list[dict]:
-    """Hot and tier A venues with a venue key and a name, highest score
-    first, one row per venue."""
+def _wanted(row: dict, min_b: int) -> bool:
+    if row.get("adult"):
+        return False  # adult venues stay in the spreadsheet only
+    if row.get("hot") or row.get("priority") == "A":
+        return True
+    return row.get("priority") == "B" and (row.get("lead_score") or 0) >= min_b
+
+
+def candidates(rows: list[dict], min_b: int | None = None) -> list[dict]:
+    """Hot, tier A and strong tier B venues (not adult) with a venue key and
+    a name, highest score first, one row per venue."""
+    min_b = min_b_score() if min_b is None else min_b
     picked = [r for r in rows if r.get("venue_key") and (r.get("business_name") or "").strip()
-              and (r.get("hot") or r.get("priority") == "A")]
+              and _wanted(r, min_b)]
     picked.sort(key=lambda r: (-(r.get("lead_score") or 0), r.get("business_name") or ""))
     unique: dict[str, dict] = {}
     for row in picked:  # a venue queued twice in a day is one entry
@@ -267,7 +289,7 @@ def entry_values(row: dict) -> dict:
                                     row.get("state"), row.get("zip")) if p)
     values = {
         MATCH_ATTRIBUTE: row.get("venue_key"),
-        "priority": "Hot" if row.get("hot") else "A",
+        "priority": "Hot" if row.get("hot") else (row.get("priority") or "A"),
         "score": row.get("lead_score"),
         "stage": row.get("stage") if row.get("stage") in STAGE_OPTIONS else None,
         "market": row.get("market"),
@@ -358,25 +380,54 @@ def check_target_fields(client: Client) -> None:
             raise AttioError(f"attio option {want} missing on {PARENT_OBJECT}.{attr}")
 
 
-def sync(client: Client | None, rows: list[dict], *, write: bool,
-         cap: int | None = None) -> dict:
-    """Put the day's Hot and A venues into the License Leads list.
+def ensure_priority_options(client: Client) -> list[str]:
+    """Add any PRIORITY_OPTIONS missing from the list's Priority select (the
+    live list was made with Hot and A only). Returns the titles added."""
+    path = f"/lists/{LIST_SLUG}/attributes/priority/options"
+    data = client.request("GET", path)
+    have = {o.get("title") for o in (data or {}).get("data") or []
+            if isinstance(o, dict) and not o.get("is_archived")}
+    added = [title for title in PRIORITY_OPTIONS if title not in have]
+    for title in added:
+        client.request("POST", path, body={"data": {"title": title}})
+    return added
 
-    Returns counts only: candidates, hot, created (new Targets), reused
-    (existing Targets), added (new list entries), updated (entries refreshed),
-    skipped (over the daily cap), written. Without a client (dry run with no
-    key) every venue counts as a new Target."""
+
+def _is_b(row: dict) -> bool:
+    return not row.get("hot") and row.get("priority") == "B"
+
+
+def sync(client: Client | None, rows: list[dict], *, write: bool,
+         cap: int | None = None, min_b: int | None = None) -> dict:
+    """Put the day's Hot, A and strong B venues into the License Leads list.
+
+    Returns counts only: candidates, hot, b (B venues added or updated),
+    created (new Targets), reused (existing Targets), added (new list
+    entries), updated (entries refreshed), skipped (over the daily cap),
+    options_added (Priority options made), b_held (B venues held back because
+    the B option is missing and this key cannot add it: needs
+    list_configuration:read-write), written. Without a client (dry run with
+    no key) every venue counts as a new Target."""
     cap = daily_cap() if cap is None else cap
-    picks = candidates(rows)
+    picks = candidates(rows, min_b)
     counts = {"candidates": len(picks), "hot": sum(1 for r in picks if r.get("hot")),
-              "created": 0, "reused": 0, "added": 0, "updated": 0, "skipped": 0,
-              "written": bool(write)}
+              "b": 0, "created": 0, "reused": 0, "added": 0, "updated": 0, "skipped": 0,
+              "options_added": 0, "b_held": 0, "written": bool(write)}
     if client is None:
         counts["created"] = counts["added"] = min(len(picks), cap)
         counts["skipped"] = len(picks) - counts["added"]
+        counts["b"] = sum(1 for r in picks[:cap] if _is_b(r))
         return counts
 
     entries = existing_entries(client, [r["venue_key"] for r in picks])
+    if write and picks:
+        # Before the first write. A dry run never changes the list.
+        try:
+            counts["options_added"] = len(ensure_priority_options(client))
+        except AttioError:
+            # Hot and A still go; B waits until the option exists.
+            counts["b_held"] = sum(1 for r in picks if _is_b(r))
+            picks = [r for r in picks if not _is_b(r)]
     targets: dict[str, str | None] = {}  # folded name -> record id, this run
     checked = False
     for row in picks:
@@ -386,6 +437,7 @@ def sync(client: Client | None, rows: list[dict], *, write: bool,
                 client.request("PATCH", f"/lists/{LIST_SLUG}/entries/{entry_id}",
                                body={"data": {"entry_values": update_values(row)}})
             counts["updated"] += 1
+            counts["b"] += _is_b(row)
             continue
 
         name = row["business_name"].strip()
@@ -417,6 +469,7 @@ def sync(client: Client | None, rows: list[dict], *, write: bool,
                 "parent_record_id": record_id, "parent_object": PARENT_OBJECT,
                 "entry_values": entry_values(row)}})
         counts["added"] += 1
+        counts["b"] += _is_b(row)
     return counts
 
 

@@ -125,11 +125,12 @@ class AttioFake(FakeSession):
     name. Answers only the calls the sync makes."""
 
     def __init__(self, entries=None, targets=None, options=("Venue", "Organizer"),
-                 statuses=("Prespecting",)):
+                 statuses=("Prespecting",), priorities=("Hot", "A", "B")):
         super().__init__()
         self.entries = dict(entries or {})   # venue key -> entry id
         self.targets = dict(targets or {})   # name -> record id
         self.options, self.statuses = options, statuses
+        self.priorities = list(priorities)   # the list's Priority select options
 
     def request(self, method, url, json=None, params=None, timeout=None):
         path = url.removeprefix(attio.API)
@@ -152,6 +153,12 @@ class AttioFake(FakeSession):
         if path == "/objects/target_client/attributes/status/statuses":
             return FakeResp(body={"data": [{"title": t, "is_archived": False}
                                            for t in self.statuses]})
+        if path == "/lists/license_leads/attributes/priority/options":
+            if method == "POST":
+                self.priorities.append(json["data"]["title"])
+                return FakeResp(body={"data": {"title": json["data"]["title"]}})
+            return FakeResp(body={"data": [{"title": t, "is_archived": False}
+                                           for t in self.priorities]})
         if method == "POST" and path == "/objects/target_client/records":
             rid = f"rec-{len(self.targets) + 1}"
             self.targets[json["data"]["values"]["company_1"]] = rid
@@ -178,6 +185,7 @@ def test_entry_values_and_update_values():
     assert "name" not in values  # the venue name lives on the parent Target
     assert attio.update_values(row(1)) == {"stage": "In review", "score": 60,
                                            "priority": "A"}
+    assert attio.entry_values(row(1, priority="B"))["priority"] == "B"
     assert attio.target_values(row(1)) == {
         "company_1": "Zebra Fake Lounge 1", "client_type": [{"option": "Venue"}],
         "status": [{"status": "Prespecting"}]}
@@ -185,10 +193,12 @@ def test_entry_values_and_update_values():
 
 def test_sync_creates_minimal_target_and_list_entry():
     s = AttioFake()
-    counts = attio.sync(fake_client(s), [row(1, hot=True, score=90), row(2, priority="B")],
-                        write=True, cap=25)
-    assert counts == {"candidates": 1, "hot": 1, "created": 1, "reused": 0, "added": 1,
-                      "updated": 0, "skipped": 0, "written": True}
+    counts = attio.sync(fake_client(s), [row(1, hot=True, score=90),
+                                         row(2, priority="B", score=59)],
+                        write=True, cap=25, min_b=60)
+    assert counts == {"candidates": 1, "hot": 1, "b": 0, "created": 1, "reused": 0,
+                      "added": 1, "updated": 0, "skipped": 0, "options_added": 0,
+                      "b_held": 0, "written": True}
     [target] = s.made("POST", "/objects/target_client/records")
     assert target == {"data": {"values": {
         "company_1": "Zebra Fake Lounge 1", "client_type": [{"option": "Venue"}],
@@ -224,24 +234,95 @@ def test_sync_updates_existing_entry_without_touching_team_status():
     [patch] = s.made("PATCH", "/lists/license_leads/entries/ent-1")
     assert patch == {"data": {"entry_values": {"stage": "Approved", "score": 91,
                                                "priority": "Hot"}}}
-    assert [m for m, *_ in s.calls] == ["POST", "PATCH"]  # one query, one update
+    # one query, one read of the Priority options, one update
+    assert [m for m, *_ in s.calls] == ["POST", "GET", "PATCH"]
 
 
 def test_sync_caps_new_targets_highest_score_first():
     rows = [row(1, hot=True, score=90), row(2, score=70), row(3, score=65),
-            row(4, priority="B", score=99), row(5, score=50),
+            row(4, priority="C", score=99), row(5, score=50),
             row(1, hot=True, score=90)]  # same venue twice: one entry
     s = AttioFake(entries={"TX|78701|3 FAKE ST": "ent-3"},
                   targets={"Zebra Fake Lounge 5": "rec-team"})
     counts = attio.sync(fake_client(s), rows + [row(6, score=40)], write=True, cap=1)
     # 1 created (venue 1), venue 2 over the cap, 3 updated, 5 reused, 6 over the cap
-    assert counts == {"candidates": 5, "hot": 1, "created": 1, "reused": 1, "added": 2,
-                      "updated": 1, "skipped": 2, "written": True}
+    assert counts == {"candidates": 5, "hot": 1, "b": 0, "created": 1, "reused": 1,
+                      "added": 2, "updated": 1, "skipped": 2, "options_added": 0,
+                      "b_held": 0, "written": True}
     [target] = s.made("POST", "/objects/target_client/records")
     assert target["data"]["values"]["company_1"] == "Zebra Fake Lounge 1"
     parents = [e["data"]["parent_record_id"]
                for e in s.made("POST", "/lists/license_leads/entries")]
     assert sorted(parents) == ["rec-2", "rec-team"]  # rec-2: the new Target
+
+
+def test_sync_selects_hot_a_and_strong_b_never_adult():
+    rows = [row(1, hot=True, score=90), row(2, score=55),
+            row(3, priority="B", score=60), row(4, priority="B", score=59),
+            row(5, priority="C", score=95),
+            row(6, score=88, adult=True), row(7, priority="B", score=80, adult=True)]
+    picks = attio.candidates(rows, min_b=60)
+    assert [r["venue_key"].split("|")[2] for r in picks] == ["1 FAKE ST", "3 FAKE ST",
+                                                             "2 FAKE ST"]
+    s = AttioFake()
+    counts = attio.sync(fake_client(s), rows, write=True, cap=50, min_b=60)
+    assert counts["candidates"] == 3 and counts["b"] == 1 and counts["added"] == 3
+    priorities = sorted(e["data"]["entry_values"]["priority"]
+                        for e in s.made("POST", "/lists/license_leads/entries"))
+    assert priorities == ["A", "B", "Hot"]
+    sent = json.dumps(s.calls)
+    assert "Lounge 6" not in sent and "Lounge 7" not in sent  # adult: never sent
+
+
+def test_sync_adds_missing_b_option_before_first_write():
+    s = AttioFake(priorities=("Hot", "A"))  # the live list was made with Hot and A
+    counts = attio.sync(fake_client(s), [row(3, priority="B", score=70)], write=True,
+                        cap=50, min_b=60)
+    assert counts["options_added"] == 1 and s.priorities == ["Hot", "A", "B"]
+    methods = [(m, p) for m, p, *_ in s.calls]
+    option_post = methods.index(("POST", "/lists/license_leads/attributes/priority/options"))
+    first_write = next(i for i, (m, p) in enumerate(methods)
+                       if (m, p) in (("POST", "/objects/target_client/records"),
+                                     ("POST", "/lists/license_leads/entries")))
+    assert option_post < first_write
+    assert s.made("POST", "/lists/license_leads/attributes/priority/options") == [
+        {"data": {"title": "B"}}]
+    # next run: B exists, nothing added
+    counts = attio.sync(fake_client(s), [row(4, priority="B", score=70)], write=True,
+                        cap=50, min_b=60)
+    assert counts["options_added"] == 0
+    assert len(s.made("POST", "/lists/license_leads/attributes/priority/options")) == 1
+    # a key that cannot add the option: Hot and A still go, B waits
+    s = AttioFake(priorities=("Hot", "A"))
+    real = s.request
+
+    def no_schema_scope(method, url, json=None, params=None, timeout=None):
+        if method == "POST" and url.endswith("/attributes/priority/options"):
+            s.calls.append((method, url.removeprefix(attio.API), json, params))
+            return FakeResp(403, {"code": "missing_scope"})
+        return real(method, url, json=json, params=params, timeout=timeout)
+
+    s.request = no_schema_scope
+    counts = attio.sync(fake_client(s), [row(1, hot=True, score=90),
+                                         row(3, priority="B", score=70)],
+                        write=True, cap=50, min_b=60)
+    assert (counts["added"], counts["b"], counts["b_held"]) == (1, 0, 1)
+    [entry] = s.made("POST", "/lists/license_leads/entries")
+    assert entry["data"]["entry_values"]["priority"] == "Hot"
+    # no B leads today: a refused option add does not stop the sync
+    assert s.priorities == ["Hot", "A"]  # still no B option
+    counts = attio.sync(fake_client(s), [row(8, hot=True, score=90)], write=True, cap=50)
+    assert counts["added"] == 1 and counts["b_held"] == 0
+    # a dry run never adds the option
+    s = AttioFake(priorities=("Hot", "A"))
+    attio.sync(fake_client(s), [row(3, priority="B", score=70)], write=False, cap=50)
+    assert s.priorities == ["Hot", "A"]
+
+
+def test_sync_default_cap_is_50(monkeypatch):
+    monkeypatch.delenv("ATTIO_DAILY_CAP", raising=False)
+    counts = attio.sync(None, [row(i, score=70) for i in range(60)], write=False)
+    assert counts["added"] == 50 and counts["skipped"] == 10
 
 
 def test_sync_checks_target_options_before_creating():
@@ -293,14 +374,20 @@ def test_client_retries_rate_limit():
 def test_settings(monkeypatch):
     for var in ("ATTIO_API_KEY", "ATTIO_WRITE_API_KEY", "ATTIO_DAILY_CAP"):
         monkeypatch.delenv(var, raising=False)
-    assert not attio.configured() and attio.daily_cap() == 25
+    monkeypatch.delenv("ATTIO_MIN_B_SCORE", raising=False)
+    assert not attio.configured() and attio.daily_cap() == 50
+    assert attio.min_b_score() == 60
+    monkeypatch.setenv("ATTIO_MIN_B_SCORE", "70")
+    assert attio.min_b_score() == 70
+    monkeypatch.setenv("ATTIO_MIN_B_SCORE", "high")
+    assert attio.min_b_score() == 60
     monkeypatch.setenv("ATTIO_API_KEY", "read")
     monkeypatch.setenv("ATTIO_WRITE_API_KEY", "write")
     assert attio.api_key() == "write"
     monkeypatch.setenv("ATTIO_DAILY_CAP", "40")
     assert attio.daily_cap() == 40
     monkeypatch.setenv("ATTIO_DAILY_CAP", "lots")
-    assert attio.daily_cap() == 25
+    assert attio.daily_cap() == 50
 
 
 def test_counts_file_roundtrip(tmp_path):
@@ -322,7 +409,8 @@ def test_cli_attio_sync_logs_counts_only(monkeypatch, caplog, tmp_path):
     monkeypatch.setenv("ATTIO_API_KEY", "test-key")
     monkeypatch.setattr(cli.db, "connect", lambda: _NullConn())
     monkeypatch.setattr(leadsheet, "load_rows", lambda conn, day, open_only=False: [
-        row(1, hot=True, score=90), row(2, priority="B")])
+        row(1, hot=True, score=90), row(2, priority="B", score=40)])
+    monkeypatch.delenv("ATTIO_MIN_B_SCORE", raising=False)
     real_client = attio.Client
     fake = AttioFake()
     monkeypatch.setattr(attio, "Client",
@@ -385,6 +473,18 @@ def test_slack_message_without_hot_or_attio_and_escaping():
                         {"added": 0, "updated": 0, "skipped": 3})
     assert "Fake &lt;Bar&gt; &amp; Co, Austin (In review)" in hot
     assert "3 more over today's Attio limit, in the spreadsheet" in hot
+
+
+def test_slack_counts_b_sent_to_attio_and_never_names_adult():
+    rows = [row(1, hot=True, score=90, city="Houston"),
+            row(2, hot=True, score=95, city="Miami", adult=True,
+                business_name="Zebra Adult Fake Club"),
+            row(3, priority="B", score=70)]
+    text = slack.compose(rows, {"added": 2, "updated": 1, "b": 1, "skipped": 0})
+    assert "Zebra Adult Fake Club" not in text and "Miami" not in text
+    assert "Hot: Zebra Fake Lounge 1, Houston (In review)" in text
+    assert "Added to Attio: 2 new, 1 updated (1 B)" in text
+    assert "—" not in text
 
 
 def test_slack_posts_only_on_news():

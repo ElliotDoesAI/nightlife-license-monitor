@@ -56,8 +56,10 @@ Desktop (or another folder outside the repo) only.
    Run SQL with `uv run python -c` and psycopg, or `psql "$DATABASE_URL"` if
    psql is installed. Write results to a file outside the repo.
 
-Columns worth explaining: Priority (A strongest), Hot (A with a score of
-75 or more: call first), Score (0 to 100 ticketing fit, see the How scoring
+Columns worth explaining: Priority (A strongest: nightclubs, lounges and
+ticketed venues), Hot (A with a score of 75 or more: call first; never an
+adult venue), Business type ("(adult)" at the end marks a gentlemen's club
+or similar), Score (0 to 100 ticketing fit, see the How scoring
 works tab), Stage (Received, In review, Approved, Licensed), Filing (new application,
 change of owner, new location...), Map / Google / Instagram (search links to
 find the phone and website by hand), Lead ID (use with skill

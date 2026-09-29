@@ -200,6 +200,14 @@ MODIFIER_DESCRIPTIONS = {
     "EVNT": "Event center",
 }
 
+#: Ticketed-venue series and modifiers -> qualify.NIGHTLIFE_LICENSE_POINTS
+#: keys (official license-types list; counts in the 2026-09-29 extract:
+#: 11PA 117, 12RT 24, SCX 97, SCF 1; EVNT and DEV none yet). SBX bowling
+#: alleys stay B and SCC county facilities are left out.
+TICKETED_SERIES = {"11PA": "theater", "12RT": "sports_venue"}
+TICKETED_MODIFIERS = {"SCX": "event_venue", "SCF": "event_venue",
+                      "EVNT": "event_venue", "DEV": "event_venue"}
+
 #: A Florida license counts as a newly licensed lead for this many days.
 LICENSED_FRESH_DAYS = 60
 
@@ -361,7 +369,16 @@ class FlAbtSource(Source):
     def nightlife_license(self, rec: Record) -> tuple[str, ...]:
         # Blank-modifier quota liquor license: the classic full-liquor bar.
         # license_type is "4COP" etc. only when there is no modifier.
-        return ("full_liquor_bar",) if (rec.license_type or "") in _QUOTA_COP else ()
+        code = (rec.license_type or "").upper()
+        series, _, modifier = code.partition("-")
+        found = []
+        if code in _QUOTA_COP:
+            found.append("full_liquor_bar")
+        if series in TICKETED_SERIES:
+            found.append(TICKETED_SERIES[series])
+        if modifier in TICKETED_MODIFIERS:
+            found.append(TICKETED_MODIFIERS[modifier])
+        return tuple(found)
 
     def contact(self, raw: dict) -> dict:
         parts = [_clean(raw.get(f"Mail Address {i}")) for i in (1, 2, 3)]

@@ -15,11 +15,12 @@ The message looks like this (synthetic example):
 ```
 New license leads: 14 today (3 Hot, 5 A, 6 B)
 Hot: Club X, Houston (Approved) · Lounge Y, Miami (Licensed) · ...
-Added to Attio: 8 new, 2 updated · Full list in today's email.  <link to License Leads in Attio>
+Added to Attio: 8 new, 2 updated (3 B) · Full list in today's email.  <link to License Leads in Attio>
 ```
 
 At most five Hot names, with city and stage only: no addresses, phones or
-owners. The GitHub log says `slack posted: N leads (N hot)` or `skipped`,
+owners, and never an adult venue. "(3 B)" is how many of the Attio
+additions are B leads. The GitHub log says `slack posted: N leads (N hot)` or `skipped`,
 never the message.
 
 ## Make the webhook (owner does this in the browser)

@@ -2,7 +2,7 @@
 
 This folder is your nightlife lead finder. Every morning it reads public
 liquor license filings from official government websites and picks out the
-ones that look like new or changing bars, clubs, lounges, restaurants and
+ones that look like new or changing bars, clubs, lounges, ticketed venues, restaurants and
 taprooms in big nightlife cities. Then it emails you the list.
 
 It already runs by itself on GitHub every day at 15:30 UTC (8:30 in Los
@@ -168,7 +168,7 @@ time. If it landed there, mark it "Not spam".
 ## What the daily email looks like
 
 The message itself is short: how many new leads came in, how many are Hot,
-how many are nightclubs, bars or restaurants, which cities they are in, and
+how many are clubs and ticketed venues, bars or restaurants, which cities they are in, and
 whether every source ran clean. It holds no business names. The leads are in
 the attached Excel file.
 
@@ -182,7 +182,7 @@ The Excel file has tabs along the bottom:
 On every tab the best leads are at the top. Each row is one venue:
 
 - **Priority**: A, B or C (see below).
-- **Hot**: says Hot for the nightclubs most worth calling first.
+- **Hot**: says Hot for the A venues most worth calling first.
 - **Score**: 0 to 100. Higher is a better fit for ticketing. It adds up the
   kind of venue, a nightlife license (like a Chicago amusement license or
   Texas late hours), how far along the license is, and whether it is a new
@@ -201,7 +201,8 @@ On every tab the best leads are at the top. Each row is one venue:
   link, and the Lead ID numbers you use when you tell Claude Code which leads
   to mark reviewed.
 
-Once they are set up, the same run also puts the Hot and A leads into a
+Once they are set up, the same run also puts the Hot and A leads, plus the
+best B leads (score 60 or more), into a
 "License Leads" list in Attio, on your Targets, and posts a short note in your team's Slack
 channel when new leads come in. The Slack note shows the counts and a few
 Hot venue names with their city. Addresses and phone numbers stay in the
@@ -228,10 +229,16 @@ in plain words. For example:
 - "What would go to Attio today?"
 - "Set up the Slack ping."
 
-Priority: **A** is nightclubs and lounges. **B** is obvious bars and event
-venues, like taverns, pubs, taprooms, breweries, comedy clubs and event
-centers. **C** is restaurants. Coffee shops, bakeries and big chains are left
-out. Start with the Hot rows, then the rest of the A rows. If a lead is in the wrong tier, tell Claude Code.
+Priority: **A** is nightclubs, lounges and ticketed venues: comedy clubs,
+live music, sports venues like small stadiums and arenas, theaters, and event
+venues. **B** is bars and similar places, like taverns, pubs, taprooms,
+breweries, karaoke, pool halls, bowling and cinemas. A restaurant with a
+lounge is B too. **C** is restaurants. Coffee shops, bakeries and big chains
+are left out.
+
+Adult clubs (gentlemen's clubs and the like) stay in the spreadsheet with
+"(adult)" after the business type. They are never Hot, never go to Attio and
+are never named in Slack. Start with the Hot rows, then the rest of the A rows. If a lead is in the wrong tier, tell Claude Code.
 It can adjust the rules.
 
 ## Good to know
