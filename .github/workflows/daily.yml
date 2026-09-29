@@ -36,6 +36,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+          RAW_RETENTION_DAYS: ${{ vars.RAW_RETENTION_DAYS || '14' }}
+          STORAGE_ALARM_MB: ${{ vars.STORAGE_ALARM_MB || '400' }}
           ONLY_SOURCE: ${{ inputs.source }}
           TRIGGER: ${{ github.event_name }}
         run: |
@@ -43,4 +45,27 @@ jobs:
             uv run licmon run --trigger "$TRIGGER" --source "$ONLY_SOURCE"
           else
             uv run licmon run --trigger "$TRIGGER"
+          fi
+
+  # GitHub switches off schedules in PUBLIC repos after 60 days with no
+  # repository activity. Push an empty commit when the repo has been quiet for
+  # 45 days. Skipped for private repos (no such rule there).
+  keepalive:
+    if: github.event_name == 'schedule' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Empty commit if quiet for 45 days
+        run: |
+          last=$(git log -1 --format=%ct)
+          age_days=$(( ( $(date +%s) - last ) / 86400 ))
+          echo "last commit ${age_days} days ago"
+          if [ "$age_days" -ge 45 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive: keep the daily schedule enabled"
+            git push
           fi

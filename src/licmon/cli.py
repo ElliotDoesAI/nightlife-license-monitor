@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import logging
+import os
 import sys
 from datetime import date, datetime, timezone
 
@@ -35,13 +36,29 @@ RECORD_EXPORT_COLUMNS = [
 REVIEW_STATUSES = ("new", "approved", "rejected", "contacted", "snoozed")
 
 
+# Neon Free stops accepting writes at 512 MB. Fail loudly well before that so
+# the owner gets a red run + email instead of silent data loss.
+STORAGE_ALARM_MB = float(os.environ.get("STORAGE_ALARM_MB", "400"))
+
+
 def cmd_run(args) -> int:
+    log = logging.getLogger("licmon")
     results = pipeline.run(get_sources(args.source), trigger=args.trigger)
+    code = 0
     failed = [r.source for r in results if r.status != "success"]
     if failed:
-        logging.getLogger("licmon").error("failed sources: %s", ", ".join(failed))
-        return 1
-    return 0
+        log.error("failed sources: %s", ", ".join(failed))
+        code = 1
+    with db.connect() as conn:
+        size = db.database_mb(conn)
+    if size >= STORAGE_ALARM_MB:
+        log.error("STORAGE ALARM: database is %.0f MB (alarm at %.0f MB, Neon Free "
+                  "limit 512 MB). Lower RAW_RETENTION_DAYS or upgrade the plan.",
+                  size, STORAGE_ALARM_MB)
+        code = 1
+    else:
+        log.info("database size %.0f MB (alarm at %.0f MB)", size, STORAGE_ALARM_MB)
+    return code
 
 
 def cmd_probe(args) -> int:

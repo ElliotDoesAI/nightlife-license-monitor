@@ -87,5 +87,11 @@ def prune_snapshots(conn: psycopg.Connection, keep_days: int) -> int:
     return n
 
 
+def database_mb(conn: psycopg.Connection) -> float:
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_database_size(current_database())")
+        return cur.fetchone()[0] / 1024 / 1024
+
+
 def jsonb(value) -> Jsonb:
     return Jsonb(value)
