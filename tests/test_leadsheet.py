@@ -62,7 +62,10 @@ def test_group_merges_venue_and_cleans_fields():
     assert top["filed_on"] == date(2026, 9, 18)
     assert top["license"] == "Late Hours Certificate; Mixed Beverage Permit"
     assert top["lead_ids"] == "1 2"
-    assert top["lookup_url"].startswith("https://www.google.com/maps/search/?api=1&query=")
+    assert top["map_url"].startswith("https://www.google.com/maps/search/?api=1&query=ZEBRA")
+    assert top["google_url"] == "https://www.google.com/search?q=ZEBRA+FAKE+LOUNGE+AUSTIN+TX"
+    assert top["instagram_url"] == ("https://www.google.com/search?q="
+                                    "site%3Ainstagram.com+ZEBRA+FAKE+LOUNGE")
     assert rows[1]["company"] is None  # no DBA: the name is the company
 
 
@@ -96,7 +99,7 @@ def test_xlsx_layout_links_and_no_formulas():
     assert ws.title == "Leads 2026-10-01"
     assert [c.value for c in ws[1]] == leadsheet.HEADERS
     assert ws.freeze_panes == "C2"
-    assert ws.auto_filter.ref == f"A1:S3"
+    assert ws.auto_filter.ref == "A1:U3"
     name_col = leadsheet.HEADERS.index("Business name") + 1
     evil = ws.cell(row=2, column=name_col)
     assert evil.data_type == "s" and evil.value.startswith("=")

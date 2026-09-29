@@ -1,8 +1,9 @@
 """The owner's lead spreadsheet: one clean row per venue, outreach first.
 
 Built from the review queue plus contact details the official records
-themselves publish (see Source.contact). No outside lookups: the "Look up"
-column is a plain map-search link the owner clicks by hand.
+themselves publish (see Source.contact). No automatic outside lookups: the
+Map, Google and Instagram columns are plain search links the owner clicks by
+hand to find a phone number, website or social account.
 
 Local and email use only. Never print rows in GitHub Actions (public logs).
 """
@@ -35,7 +36,9 @@ COLUMNS: list[tuple[str, str, int]] = [
     ("market", "Market", 24),
     ("mailing_address", "Mailing address", 40),
     ("license", "License applied for", 40),
-    ("lookup_url", "Look up online", 14),
+    ("map_url", "Map", 8),
+    ("google_url", "Google", 9),
+    ("instagram_url", "Instagram", 11),
     ("record_url", "Official record", 14),
     ("lead_ids", "Lead ID", 12),
 ]
@@ -69,6 +72,13 @@ def _business_type(priority: str, cats: list) -> str:
         return ("Brewery / taproom" if cats and cats[0] == "hospitality_mfg"
                 else "Bar / event venue")
     return BUSINESS_TYPES.get(cats[0], "Other") if cats else "Other"
+
+
+def _search(base: str, query: str) -> str | None:
+    """A plain search link. Instagram's own search needs a login, so the
+    Instagram column is a Google search limited to instagram.com."""
+    query = " ".join((query or "").split())
+    return base + quote_plus(query) if query else None
 
 
 def _filing(app_types: list[str], source: str) -> str:
@@ -191,7 +201,8 @@ def group_records(records: list[dict]) -> list[dict]:
         company = top.get("legal_name") if top.get("legal_name") != name else None
         address = ", ".join(p for p in (top.get("address"), top.get("city"),
                                         top.get("state"), top.get("zip")) if p)
-        lookup_q = " ".join(p for p in (name, address) if p)
+        map_q = " ".join(p for p in (name, address) if p)
+        web_q = " ".join(p for p in (name, top.get("city"), top.get("state")) if p)
         rows.append({
             "queue_date": queue_date,
             "priority": min((r.get("tier") or "C") for r in recs),
@@ -212,8 +223,10 @@ def group_records(records: list[dict]) -> list[dict]:
             "mailing_address": _title(next((c["mailing_address"] for c in contacts
                                             if c.get("mailing_address")), None)) or None,
             "license": "; ".join(_uniq(r.get("license_description") for r in recs)),
-            "lookup_url": ("https://www.google.com/maps/search/?api=1&query="
-                           + quote_plus(lookup_q)) if lookup_q else None,
+            "map_url": _search("https://www.google.com/maps/search/?api=1&query=", map_q),
+            "google_url": _search("https://www.google.com/search?q=", web_q),
+            "instagram_url": _search("https://www.google.com/search?q=",
+                                     f"site:instagram.com {name}" if name else ""),
             "record_url": top.get("source_url"),
             "lead_ids": " ".join(str(r["record_id"]) for r in
                                  sorted(recs, key=lambda r: r["record_id"])),
@@ -262,7 +275,8 @@ def build_xlsx(rows: list[dict], title: str = "Leads") -> bytes:
              "B": PatternFill("solid", fgColor="FEF3C7"),
              "C": PatternFill("solid", fgColor="F3F4F6")}
     link_font = Font(color="1D4ED8", underline="single")
-    link_cols = {"lookup_url": "Map", "record_url": "Record"}
+    link_cols = {"map_url": "Map", "google_url": "Search", "instagram_url": "Search",
+                 "record_url": "Record"}
     for i, row in enumerate(rows, start=2):
         for j, (key, _, _) in enumerate(COLUMNS, start=1):
             value = _cell(row.get(key))
