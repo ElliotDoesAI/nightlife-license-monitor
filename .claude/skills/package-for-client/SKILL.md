@@ -23,8 +23,9 @@ uncommitted cannot leak in. It keeps `.git` so the owner can pull updates.
    `--origin` sets the remote inside the zip (default: this folder's
    `origin`). After a GitHub transfer, the old URL redirects, but setting the
    new one is cleaner.
-3. The script fails if the clone contains `.env*`, `.neon`, `*.csv` outside
-   `tests/fixtures/`, or anything that looks like a real Postgres connection
-   string with a password. It prints the zip path, size and file count.
+3. The script fails if the clone contains `.env*`, `.neon`, data files
+   (`*.csv`, `*.xlsx`, `*.db`...) outside `tests/fixtures/`, or anything that
+   looks like a real Postgres connection string with a password. It prints
+   the zip path, size and file count.
 4. Send the zip by a private channel. The owner unzips it and follows
    `ONBOARDING.md`.

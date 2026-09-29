@@ -5,18 +5,20 @@ description: Change which filings count as leads, the scoring and tiers, keyword
 
 # Tune scoring, tiers and metros
 
-Rules are deterministic and live in two files:
+Rules are deterministic word lists in two files:
 
-- `src/licmon/qualify.py`: whether a filing qualifies (target metro, license
-  category points, application type, store/gas exclusion words, routine
-  renewals) and which tier it gets. The owner sells event ticketing, so the
-  tier is the venue kind, mostly from the business name:
-  `NIGHTCLUB_WORDS` / `NIGHTCLUB_LICENSES` = A (nightclubs, lounges);
-  `BAR_VENUE_WORDS` / `BAR_VENUE_LICENSES` = B (bars, event venues);
-  everything else = C (restaurants). `FOOD_BAR` and `RESTAURANT_WORDS` stop
-  "sushi bar" or "bar & grill" from counting as bars. `DROP_WORDS` (coffee,
+- `src/licmon/qualify.py`: whether a filing qualifies (target metro,
+  license category points, application type, routine renewals dropped) and
+  which tier it gets. The owner sells event ticketing, so the tier is the
+  venue kind, mostly from the business name: `NIGHTCLUB_WORDS` /
+  `NIGHTCLUB_LICENSES` = A (nightclubs, lounges); `BAR_VENUE_WORDS` /
+  `BAR_VENUE_LICENSES` = B (bars, event venues); everything else that
+  qualifies = C (restaurants). `FOOD_BAR` and `RESTAURANT_WORDS` stop "sushi
+  bar" or "bar & grill" from counting as bars. `DROP_WORDS` (coffee,
   bakery, dessert...) and `CHAINS` (national chains, matched at the start of
-  the name) remove a lead. Add a word to the right list to move leads.
+  the name) remove a lead. Scores add license-category points, filing points
+  (`APPLICATION_TYPE_POINTS`), and tier bonus (A 60 / B 30 / C 0). Add a word
+  to the right list to move leads.
 - `src/licmon/metros.py`: which counties (or cities) make up each metro.
 
 Steps:

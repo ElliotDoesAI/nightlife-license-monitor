@@ -130,7 +130,7 @@ def cmd_export(args) -> int:
             with open(args.out, "wb") as fh:
                 fh.write(leadsheet.build_xlsx(rows, title=f"Leads {day}" if day else "Leads"))
         else:
-            out = open(args.out, "w", newline="") if args.out else sys.stdout
+            out = open(args.out, "w", newline="", encoding="utf-8") if args.out else sys.stdout
             try:
                 leadsheet.write_csv(rows, out)
             finally:
@@ -140,7 +140,7 @@ def cmd_export(args) -> int:
         return 0
     with db.connect() as conn:
         columns, rows = _queue_rows(conn, day, args.open, args.per_record)
-    out = open(args.out, "w", newline="") if args.out else sys.stdout
+    out = open(args.out, "w", newline="", encoding="utf-8") if args.out else sys.stdout
     try:
         w = csv.writer(out)
         w.writerow(columns)

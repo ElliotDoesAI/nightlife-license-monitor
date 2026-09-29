@@ -49,10 +49,10 @@ weeks later than the other states.
 ## Connecting to the database
 
 ```bash
-# One-time on a new computer: install tools, sign in, link this folder.
+# One-time on the owner's Mac: install tools, sign in, link this folder.
+brew install gh node uv
 npm i -g neon@latest && neon login
 neon link --project-id tiny-truth-43995411 --branch production -y
-curl -LsSf https://astral.sh/uv/install.sh | sh   # Python runner, if missing
 uv sync
 
 # Each session: load the connection string without printing it.
@@ -70,7 +70,7 @@ export DATABASE_URL="$(neon cs production --project-id tiny-truth-43995411 --ssl
 | "Leads from a certain day" | `uv run licmon export --date 2026-10-01 --out ...` |
 | "Mark these as approved / rejected / contacted / snoozed" | Find the `Lead ID` column in the spreadsheet, then `uv run licmon review <id> <id> --status approved --note "..."`. One venue can have several record ids; update all of them. `--status new` reopens a lead. |
 | "One row per application" / "every column" | `--per-record` or `--full` with a `.csv` file name (raw, wide layout for troubleshooting). |
-| "Show me the email" / "resend today's email" | Preview: `uv run licmon email --preview ~/Desktop/email-preview` (writes files, sends nothing). Send: only after the owner says yes, `uv run licmon email` with the SMTP variables set (skill `email-setup`). |
+| "Show me the email" / "resend today's email" | Preview: `uv run licmon email --preview ~/Desktop/email-preview` (writes files, sends nothing). Send: only after the owner says yes, `uv run licmon email` with the SMTP variables set (skill `email-setup`). Add `--date 2026-10-01` to either for another day. |
 | "Nothing came in today?" | An empty list is normal on quiet days. Check `uv run licmon status`: if every source says `success`, it is working. |
 | "Is it working?" | `uv run licmon status` (last run per source, queue size by day). Also `gh run list --workflow daily-collect -L 5`. |
 | "Run it now" | `gh workflow run daily-collect`, wait ~10 s, then `gh run watch --exit-status $(gh run list --workflow daily-collect -L 1 --json databaseId -q ".[0].databaseId")`. This also sends the email if it is set up. |
@@ -99,26 +99,24 @@ The owner's own Google Workspace account sends the email to himself:
 secrets; never write the address into this public repo), and `SMTP_PASSWORD`
 is an app password he makes on his Google account.
 
-The spreadsheet (`src/licmon/leadsheet.py`) has one row per venue: priority,
-business name, company, business type, filing (new application, change of
-owner...), status, filed-on date, phone and owner/applicant names (Washington
-publishes these), address, market, mailing address (California, Florida),
-license, a map-search link to find the phone and website by hand, the official
-record link, and the Lead ID. Contact details come only from the official
-records. Automatic lookups on other sites are out of scope (PRD).
+The spreadsheet has one row per venue; its columns are listed under "The
+spreadsheet" in README.md (`src/licmon/leadsheet.py`). Map, Google and
+Instagram are plain search links the owner clicks by hand to find the phone
+and website; contact details come only from the official records, never from
+outside lookups (PRD).
 
 Settings live in the GitHub `production` environment:
 
 | Name | Kind | Value |
 |---|---|---|
-| `SMTP_USERNAME` | secret | the sending Gmail/Workspace address (Dylan's own) |
+| `SMTP_USERNAME` | secret | the owner's own sending address (already set; never write it in this repo) |
 | `SMTP_PASSWORD` | secret | a Gmail **app password** (16 letters), not the normal password |
 | `LEADS_EMAIL_TO` | secret | who receives it (comma-separated) |
 | `LEADS_EMAIL_FROM` | secret, optional | defaults to `SMTP_USERNAME` |
 | `SMTP_HOST` | variable, optional | default `smtp.gmail.com` |
 | `SMTP_PORT` | variable, optional | default `587` (use `465` for SSL-only providers) |
 
-If `SMTP_PASSWORD` or `LEADS_EMAIL_TO` is missing, the email step skips itself
+If any of the settings above is missing, the email step skips itself
 and the run stays green. Setup steps are in the `email-setup` skill.
 
 ## If something breaks
@@ -171,7 +169,8 @@ Follow skill `handover-checklist`. In short:
 
 ## Developing
 
-Tests need a disposable Postgres (never the real database):
+Tests need a disposable Postgres in Docker (Docker Desktop on the owner's
+Mac) — never the real database:
 
 ```bash
 docker run -d --rm --name licmon-test-pg -e POSTGRES_PASSWORD=test \
@@ -206,3 +205,4 @@ needed at current volumes.
 | `storage-alarm` | handle the STORAGE ALARM / database size |
 | `handover-checklist` | finish the one-time setup after the repo transfer |
 | `package-for-client` | build the zip to hand this project to someone |
+| `neon-postgres` | third-party Neon database reference (connections, branching, SQL) |

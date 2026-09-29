@@ -70,8 +70,9 @@ def settings_from_env() -> tuple[str, list[str]]:
 
 
 def email_configured() -> bool:
-    """True when the three required settings are all non-empty."""
+    """True when the required settings are all non-empty."""
     return bool(os.environ.get("SMTP_HOST", "").strip()
+                and os.environ.get("SMTP_USERNAME", "").strip()
                 and os.environ.get("SMTP_PASSWORD", "")
                 and os.environ.get("LEADS_EMAIL_TO", "").strip())
 

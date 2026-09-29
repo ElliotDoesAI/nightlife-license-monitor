@@ -7,35 +7,11 @@ rule under test: the email body never contains lead data.
 
 from __future__ import annotations
 
-import sys
-import types
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-try:
-    from licmon import leadsheet  # parent's new module; lands separately
-    LEADSHEET_REAL = True
-except ImportError:
-    LEADSHEET_REAL = False
-    leadsheet = types.ModuleType("licmon.leadsheet")
-    leadsheet.XLSX_MIME = ("application/vnd.openxmlformats-officedocument."
-                           "spreadsheetml.sheet")
-
-    def _stub_build_xlsx(rows, title="Leads"):
-        return b"PK-fake"
-
-    def _stub_load_rows(conn, day=None, open_only=False):
-        raise NotImplementedError("stub leadsheet has no database shape")
-
-    leadsheet.build_xlsx = _stub_build_xlsx
-    leadsheet.load_rows = _stub_load_rows
-    sys.modules["licmon.leadsheet"] = leadsheet
-    import licmon
-
-    licmon.leadsheet = leadsheet
-
-from licmon import notify
+from licmon import leadsheet, notify
 
 DAY = date(2026, 9, 29)
 
@@ -232,7 +208,6 @@ def test_attachment_is_xlsx(fake_xlsx):
     assert fake_xlsx["title"] == "Leads"
 
 
-@pytest.mark.skipif(not LEADSHEET_REAL, reason="licmon.leadsheet not landed yet")
 def test_attachment_with_real_builder():
     data = sample_data()
     msg = notify.compose(data, DAY, sender="s", recipients=["o"])
@@ -360,19 +335,19 @@ def test_settings_from_env(monkeypatch):
 
 
 def test_email_configured(monkeypatch):
-    for var in ("SMTP_HOST", "SMTP_PASSWORD", "LEADS_EMAIL_TO"):
+    for var in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "LEADS_EMAIL_TO"):
         monkeypatch.delenv(var, raising=False)
     assert not notify.email_configured()
     monkeypatch.setenv("SMTP_HOST", "smtp.example.invalid")
     monkeypatch.setenv("SMTP_PASSWORD", "pw")
-    assert not notify.email_configured()
     monkeypatch.setenv("LEADS_EMAIL_TO", "o@example.invalid")
+    assert not notify.email_configured()  # no sender account yet
+    monkeypatch.setenv("SMTP_USERNAME", "o@example.invalid")
     assert notify.email_configured()
 
 
 # --- load_daily integration (disposable Postgres only; needs real leadsheet) ---
 
-@pytest.mark.skipif(not LEADSHEET_REAL, reason="licmon.leadsheet not landed yet")
 def test_load_daily_integration(pg):
     import json
     from licmon import pipeline

@@ -6,9 +6,9 @@ description: Mark leads as approved, rejected, contacted, snoozed or back to new
 # Record the owner's review decisions
 
 1. Load the database (skill `connect-database`).
-2. Get the record ids. They are in the `Lead ID` column of the spreadsheet
-   (space-separated). One venue can have several ids; update all
-   of them. If the owner names a venue instead, find its ids:
+2. Get the record ids from the `Lead ID` column of the spreadsheet
+   (space-separated). One venue can have several ids; update all of them.
+   If the owner names a venue instead, find its ids:
 
    ```sql
    SELECT record_ids, legal_name, dba, address, queue_date

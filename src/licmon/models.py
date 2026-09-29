@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 # Fields whose change counts as a "material" change (PRD: status, business
@@ -98,12 +98,6 @@ class Record:
     def material_hash(self, fields: tuple[str, ...] = MATERIAL_FIELDS) -> str:
         blob = json.dumps(self.material(fields), sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()
-
-    def to_dict(self) -> dict:
-        d = asdict(self)
-        if self.application_date:
-            d["application_date"] = self.application_date.isoformat()
-        return d
 
 
 _ADDR_WORDS = {

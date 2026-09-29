@@ -48,11 +48,8 @@ point at ABC's public license lookup page for a human to open.
    marking everything removed.
 5. `qualify.py` applies deterministic rules: target metro, license category,
    application type (new / relocation / ownership change beat renewals),
-   name keywords, exclusion words. The tier is the venue kind for a ticketing
-   seller: A nightclubs/lounges, B obvious bars and event venues, C
-   restaurants; cafes, bakeries and chains are dropped. Each lead gets a
-   score, tier A/B/C and a
-   plain reason.
+   name keywords, exclusion words. Each lead gets a score, a tier (A/B/C
+   venue kind, defined in AGENTS.md) and a plain reason.
 6. Qualified new or changed records are queued. A source's very first run is a
    silent baseline except for applications dated in the last 14 days.
 7. A failing source is logged, stored with its traceback in `source_runs`, does
@@ -75,13 +72,51 @@ On your own machine, with `DATABASE_URL` set:
 ```bash
 uv run licmon status                       # last run per source, queue sizes
 uv run licmon export --out today.xlsx      # today's leads (UTC date), clean sheet
-uv run licmon export --all --open --out open.csv
+uv run licmon export --all --open --out open.xlsx
 uv run licmon review 123 456 --status approved --note "call next week"
 uv run licmon email --preview ~/Desktop/email-preview   # see the daily email
 uv run licmon requalify                    # after editing qualify.py / metros.py
 ```
 
 Never run `export` inside GitHub Actions: its logs are public.
+
+## The spreadsheet
+
+`licmon export` builds one clean row per venue per day from the
+`daily_leads` view: several applications for the same premises are merged
+into one lead, and the Lead ID cell lists every record id. A file name ending
+in `.xlsx` writes Excel, anything else writes the same clean sheet as CSV.
+
+Columns: Priority, Business name, Company / owner, Business type, Filing,
+Status, Filed on, Phone, Owner / applicant names, Address, City, State, ZIP,
+Market, Mailing address, License applied for, Map, Google, Instagram,
+Official record, Lead ID.
+
+Contact details come only from the official records: Washington publishes a
+phone number and applicant names, California and Florida publish a mailing
+address. The Map, Google and Instagram columns are plain search links the
+owner clicks by hand to find a phone number, website or social account.
+Automatic lookups on other sites are out of scope (PRD).
+
+## The daily email
+
+After collecting, the workflow runs `licmon email`: one short counts-only
+message (new leads by priority and market, whether every source ran) with
+the day's spreadsheet attached. The body never holds lead details. It sends
+even on days with no leads (no attachment then), so a missing email means
+something is wrong. It skips itself when the email settings are missing and
+the run stays green. Settings and troubleshooting live in AGENTS.md.
+
+## Repo layout
+
+```text
+src/licmon/          pipeline, qualification, spreadsheet, email, CLI
+src/licmon/sources/  one connector per official source
+.github/workflows/  daily-collect (daily.yml), tests (ci.yml), probe (probe.yml)
+tests/               deterministic tests with synthetic fixtures only
+scripts/             package_for_client.sh builds the handover zip
+.claude/skills/      step-by-step recipe per routine job (see AGENTS.md)
+```
 
 ## Setup
 
@@ -111,7 +146,8 @@ TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55432/licmon_test uv run 
 uv run licmon probe          # live fetch + parse, no database, counts only
 ```
 
-Tests use synthetic fixtures only. Never commit real records.
+Tests use a throwaway Postgres in Docker (Docker Desktop on a Mac) plus
+synthetic fixtures only. Never use the real database or commit real records.
 
 ### Adding a source
 

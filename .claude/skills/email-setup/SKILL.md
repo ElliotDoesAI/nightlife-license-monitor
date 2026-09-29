@@ -7,7 +7,15 @@ description: Set up, change, preview or test the daily lead email (Gmail app pas
 
 The daily run calls `licmon email` after collecting. It emails the owner's
 own address(es) only, never a business. Ask the owner before any real send
-and before changing recipients.
+and before changing recipients. Never write the owner's email address into
+any repo file (the repo may be public); use placeholders in examples.
+
+## Current state
+
+The sender (`SMTP_USERNAME`) and the recipient (`LEADS_EMAIL_TO`) are both
+the owner's own Google Workspace address and are already set as secrets.
+The only piece left is the app password (`SMTP_PASSWORD`), which the owner
+adds on GitHub's web page so it never passes through chat or a shell.
 
 ## Preview (sends nothing)
 
@@ -15,45 +23,47 @@ and before changing recipients.
 # needs skill connect-database first
 uv run licmon email --preview ~/Desktop/email-preview            # today (UTC)
 uv run licmon email --preview ~/Desktop/email-preview --date 2026-10-01
+open ~/Desktop/email-preview/preview.html
 ```
 
-This writes `preview.html` (open it in a browser), `preview.txt`, the Excel
+This writes `preview.html` (the message body), `preview.txt`, the Excel
 attachment and `message.eml` to that folder. Never write previews inside the
-repo.
+repo (lead data).
 
-## Set up with Gmail
+## The app password (owner does this in the browser)
 
-1. The owner makes an app password (ONBOARDING.md, step 4). It needs 2-Step
-   Verification on the Google account, then
-   myaccount.google.com/apppasswords.
-2. The owner's own work address (Google Workspace) sends to itself, so it is
-   both sender and recipient. These two secrets were set before handover;
-   check with `gh secret list --env production`. Addresses are fine to say in
-   chat but never write them into repo files (the repo may be public). The app
-   password is never said in chat. If Google says app passwords are unavailable, the Workspace admin
-   (probably Dylan) must allow 2-Step Verification for the account first.
-3. Set the non-password values:
+The owner makes a 16-letter app password at myaccount.google.com/apppasswords
+(needs 2-Step Verification on first; see ONBOARDING.md step 7). If Google
+says app passwords are unavailable, the Workspace admin (probably Dylan)
+must allow 2-Step Verification in admin.google.com first.
 
-   ```bash
-   gh secret set SMTP_USERNAME --env production --body "owner@company.com"
-   gh secret set LEADS_EMAIL_TO --env production --body "owner@company.com"
-   # optional, only if different from SMTP_USERNAME:
-   gh secret set LEADS_EMAIL_FROM --env production --body "sender@gmail.com"
-   ```
+Then the owner adds it on GitHub: repository page → **Settings** →
+**Environments** → **production** → **Add environment secret** → Name
+`SMTP_PASSWORD` → paste the 16-letter code (spaces are fine) →
+**Add secret**. Get the page URL with
+`gh repo view --json url -q .url` and append `/settings/environments`.
 
-   Gmail needs no host or port settings (defaults: `smtp.gmail.com`, `587`).
-   Another provider: `gh variable set SMTP_HOST --env production --body smtp.example.com`
-   and `gh variable set SMTP_PORT --env production --body 465` if it only
-   supports SSL.
-4. The password: the owner adds it on GitHub in the browser, so it never
-   passes through chat or a shell. Give these steps:
-   repository page → **Settings** → **Environments** → **production** →
-   **Add environment secret** → Name `SMTP_PASSWORD` → paste the 16-letter
-   code (spaces are fine) → **Add secret**.
-   Get the page URL with `gh repo view --json url -q .url` and append
-   `/settings/environments`.
-5. Check: `gh secret list --env production` shows `DATABASE_URL`,
-   `SMTP_USERNAME`, `SMTP_PASSWORD`, `LEADS_EMAIL_TO` (values are never shown).
+Check: `gh secret list --env production` shows `DATABASE_URL`,
+`SMTP_USERNAME`, `SMTP_PASSWORD`, `LEADS_EMAIL_TO` (values are never shown).
+
+Gmail needs no host or port settings (defaults: `smtp.gmail.com`, `587`).
+Only for a non-Gmail provider, set
+`gh variable set SMTP_HOST --env production --body smtp.example.com` and
+`gh variable set SMTP_PORT --env production --body 465` if it only supports
+SSL.
+
+## Change who receives it (ask first)
+
+The address is typed at the prompt, never in the command line, so it is not
+logged:
+
+```bash
+gh secret set LEADS_EMAIL_TO --env production
+```
+
+Comma-separated addresses are allowed. To use a different sender address,
+do the same with `SMTP_USERNAME` (it must be the account that made the app
+password).
 
 ## Test send
 
@@ -64,9 +74,8 @@ should say `email sent`. Ask the owner to check the inbox and spam folder.
 
 | Log says | Meaning / fix |
 |---|---|
-| `email skipped (not configured)` | `SMTP_PASSWORD` or `LEADS_EMAIL_TO` missing. Redo steps 3-4. |
+| `email skipped (not configured)` | `SMTP_PASSWORD` or `LEADS_EMAIL_TO` missing. Redo the app-password step above. |
 | `email failed (SMTPAuthenticationError)` | Wrong or revoked app password, or `SMTP_USERNAME` is not the account that made it. Make a new app password and replace `SMTP_PASSWORD`. |
-| `email failed (TimeoutError)` / connection errors | Host or port wrong. Gmail: unset `SMTP_HOST`/`SMTP_PORT` variables. |
 | `email sent` but nothing arrived | Spam folder; or a typo in `LEADS_EMAIL_TO` (re-set it). |
 
 Stop the email but keep collecting: `gh secret delete LEADS_EMAIL_TO --env production`

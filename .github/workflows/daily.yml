@@ -46,7 +46,7 @@ jobs:
           else
             uv run licmon run --trigger "$TRIGGER"
           fi
-      # Emails the owner the day's leads (CSV attached) plus source health.
+      # Emails the owner a short counts-only note with the Excel lead sheet attached.
       # Runs even when a source failed, so the email reports it. Skips itself
       # when the email secrets are not set, and on one-source reruns. Logs
       # print counts and sent/failed only.

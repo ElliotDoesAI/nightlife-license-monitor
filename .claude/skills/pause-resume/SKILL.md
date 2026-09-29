@@ -22,9 +22,10 @@ Notes:
 
 - Enabling makes the signed-in GitHub user the one who gets failure emails.
   Run it while signed in as the owner (`gh auth status`).
-- Pending lists catch up on the next run. Rolling lists (Chicago 180 days,
-  Washington 30 days) lose anything older than their window, so a pause
-  longer than 30 days can miss some Washington leads.
+- Full pending lists catch up on the next run. Rolling lists lose anything
+  older than their window: Chicago liquor 180 days, Chicago pending
+  ~6 weeks, Washington 30 days. A pause longer than 30 days can miss some
+  Washington leads.
 - To stop only the email but keep collecting, delete the recipient secret:
   `gh secret delete LEADS_EMAIL_TO --env production`. Ask the owner first.
 - GitHub disables schedules on public repos after 60 days without commits.

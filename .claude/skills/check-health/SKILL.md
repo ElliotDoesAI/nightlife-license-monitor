@@ -23,10 +23,10 @@ description: Check whether the daily scraper and email are working. Use when the
    Each source should show `success` with today's date. `baseline` on a
    source's first run is normal. `queued=0` on quiet days is normal.
 3. A failed source: skill `fix-broken-source`.
-4. Email: open the latest run with `gh run view <id> --log | grep -i email`.
-   - `email sent` : it went out. Ask the owner to check spam.
-   - `email skipped (not configured)` : secrets missing, skill `email-setup`.
-   - `email failed (SMTPAuthenticationError)` : app password wrong or
+4. Email: `gh run view <id> --log | grep -i email`.
+   - `email sent`: it went out. Ask the owner to check spam.
+   - `email skipped (not configured)`: secrets missing, skill `email-setup`.
+   - `email failed (SMTPAuthenticationError)`: app password wrong or
      revoked. Make a new one, reset `SMTP_PASSWORD` (skill `email-setup`).
 5. Database size is logged at the end of each run
    (`database size N MB (alarm at 400 MB)`). Near 400: skill `storage-alarm`.

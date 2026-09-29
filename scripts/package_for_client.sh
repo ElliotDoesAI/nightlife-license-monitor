@@ -48,8 +48,9 @@ if [ -z "$origin" ]; then
   origin="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
 fi
 
+work=""
+trap 'if [ -n "$work" ]; then rm -rf "$work"; fi' EXIT
 work="$(mktemp -d "${TMPDIR:-/tmp}/licmon-pkg.XXXXXX")"
-trap 'rm -rf "$work"' EXIT
 git clone --quiet --no-local "$repo" "$work/$name"
 cd "$work/$name"
 if [ -n "$origin" ]; then

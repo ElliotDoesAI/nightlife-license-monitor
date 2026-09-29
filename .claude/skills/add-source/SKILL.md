@@ -26,7 +26,7 @@ tell the owner and suggest a public-records request instead.
    untouched; `parse` yields `Record`s with a `category` from
    `models.CATEGORIES` (map each license type deliberately).
 4. Register it in `src/licmon/sources/__init__.py` and bump the source count
-   in the registry test.
+   in the registry test (`tests/test_socrata_sources.py`).
 5. New state: add its metros and counties to `METRO_COUNTIES` in
    `src/licmon/metros.py`. Make sure the parser's county names match.
 6. Test with a synthetic fixture (fake names/addresses) in `tests/fixtures/`
