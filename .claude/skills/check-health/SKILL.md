@@ -9,7 +9,7 @@ description: Check whether the daily scraper and email are working. Use when the
 
    ```bash
    gh run list --workflow daily-collect -L 5
-   gh workflow view daily-collect | head -5     # shows if it is disabled
+   gh workflow list --all | grep daily-collect   # "active", or "disabled_..." if off
    ```
 
    A red X means at least one source failed or the storage alarm fired.

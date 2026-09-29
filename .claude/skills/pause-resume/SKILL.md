@@ -15,7 +15,7 @@ Resume:
 
 ```bash
 gh workflow enable daily-collect
-gh workflow view daily-collect | head -5    # confirm "active"
+gh workflow list --all | grep daily-collect   # shows "active" or "disabled_manually"
 ```
 
 Notes:
