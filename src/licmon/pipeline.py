@@ -1,4 +1,5 @@
-"""Daily run: fetch -> save raw -> parse -> dedupe/diff -> qualify -> queue."""
+"""Daily run: fetch -> save raw -> parse -> dedupe/diff -> qualify -> venue
+history -> queue."""
 
 from __future__ import annotations
 
@@ -12,11 +13,12 @@ from datetime import date, datetime, timedelta, timezone
 import psycopg
 
 from . import db
+from . import history as history_mod
 from . import stage as stage_mod
 from .http import Http, SourceHTTPError
 from .metros import assign_metro
 from .models import MATERIAL_FIELDS, Record, venue_key
-from .qualify import qualify
+from .qualify import apply_history, qualify
 from .sources.base import Source
 
 log = logging.getLogger("licmon")
@@ -103,7 +105,8 @@ def run_source(conn: psycopg.Connection, source: Source, http: Http, run_id: int
                 f"parsed {res.fetched} records, below floor {source.min_records}; "
                 "upstream format may have changed")
         last_snap = snap_ids[-1] if snap_ids else None
-        _apply(conn, source, records, sr_id, last_snap, now, res)
+        _apply(conn, source, records, sr_id, last_snap, now, res, http=http,
+               snapshots=snapshots)
         res.status = "success"
         with conn.cursor() as cur:
             cur.execute(
@@ -132,7 +135,8 @@ def run_source(conn: psycopg.Connection, source: Source, http: Http, run_id: int
 
 
 def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
-           snap_id: int | None, now: datetime, res: SourceResult) -> None:
+           snap_id: int | None, now: datetime, res: SourceResult, http=None,
+           snapshots=None) -> None:
     recent_cutoff = (now - timedelta(days=BASELINE_RECENT_DAYS)).date()
     mfields = source.material_fields
     with conn.cursor() as cur:
@@ -146,7 +150,7 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
         names = [d.name for d in cur.description]
         existing = {r[1]: dict(zip(names, r)) for r in cur.fetchall()}
 
-        inserts, events, touched = [], [], []
+        inserts, updates, touched = [], [], []
         for srid, rec in records.items():
             metro = assign_metro(rec.state, rec.county, rec.city)
             q = qualify(rec, metro, source=source, today=now.date())
@@ -175,39 +179,57 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                 changes = dict(changes or {}, relisted=[False, True])
             if changes:
                 res.changed += 1
-                cur.execute(
-                    f"""UPDATE records SET {', '.join(f'{c}=%s' for c in RECORD_COLUMNS)},
-                        metro=%s, venue_key=%s, material_hash=%s, raw=%s, last_seen_at=%s,
-                        last_changed_at=%s, removed_at=NULL, last_snapshot_id=%s,
-                        qualified=%s, score=%s, tier=%s, qualify_reason=%s,
-                        stage=%s, lead_score=%s, hot=%s, adult=%s
-                        WHERE id=%s""",
-                    _values(rec) + [metro, venue_key(rec), rec.material_hash(mfields),
-                                    db.jsonb(rec.raw), now, now, snap_id, q.qualified, q.score, q.tier, q.reason,
-                                    q.stage, q.lead_score, q.hot, q.adult, old["id"]])
-                events.append((old["id"], sr_id, "changed", now, db.jsonb(changes),
-                               q.qualified))
+                updates.append((rec, metro, q, old["id"], changes))
             else:
                 touched.append(old["id"])
+
+        # Venue history for what reaches the queue today: qualified new and
+        # changed records (a baseline run only its queued ones). Network, so
+        # never for the silent baseline; a failure leaves them Unknown.
+        need = ([rec for rec, _, q, _, queued in inserts if queued]
+                + [rec for rec, _, q, _, _ in updates if q.qualified])
+        hist = history_mod.lookup(source, http, need, snapshots, now.date()) if need else {}
+        for rec, _, q, *_ in inserts + updates:
+            h = hist.get(rec.source_record_id)
+            if h:
+                apply_history(q, h.label)
+
+        for rec, metro, q, rid, changes in updates:
+            h = hist.get(rec.source_record_id)
+            cur.execute(
+                f"""UPDATE records SET {', '.join(f'{c}=%s' for c in RECORD_COLUMNS)},
+                    metro=%s, venue_key=%s, material_hash=%s, raw=%s, last_seen_at=%s,
+                    last_changed_at=%s, removed_at=NULL, last_snapshot_id=%s,
+                    qualified=%s, score=%s, tier=%s, qualify_reason=%s,
+                    stage=%s, lead_score=%s, hot=%s, adult=%s{_HISTORY_SET if h else ''}
+                    WHERE id=%s""",
+                _values(rec) + [metro, venue_key(rec), rec.material_hash(mfields),
+                                db.jsonb(rec.raw), now, now, snap_id, q.qualified, q.score,
+                                q.tier, q.reason, q.stage, q.lead_score, q.hot, q.adult]
+                + (_history_values(h) if h else []) + [rid])
+        events = [(rid, sr_id, "changed", now, db.jsonb(changes), q.qualified)
+                  for rec, metro, q, rid, changes in updates]
 
         if touched:
             cur.execute("UPDATE records SET last_seen_at=%s, last_snapshot_id=%s "
                         "WHERE id = ANY(%s)", (now, snap_id, touched))
 
         if inserts:
-            placeholders = ", ".join(["%s"] * (len(RECORD_COLUMNS) + 21))
+            placeholders = ", ".join(["%s"] * (len(RECORD_COLUMNS) + 24))
             cur.executemany(
                 f"""INSERT INTO records (source, source_record_id,
                     {', '.join(RECORD_COLUMNS)}, metro, venue_key, material_hash, raw,
                     first_seen_at, last_seen_at, last_changed_at, first_snapshot_id,
                     last_snapshot_id, qualified, score, tier, qualify_reason,
-                    review_status, review_notes, stage, lead_score, hot, adult)
+                    review_status, review_notes, stage, lead_score, hot, adult,
+                    venue_history, prior_licenses, prior_since)
                     VALUES ({placeholders}) RETURNING source_record_id, id""",
                 [[rec.source, rec.source_record_id] + _values(rec)
                  + [metro, venue_key(rec), rec.material_hash(mfields), db.jsonb(rec.raw),
                     now, now, now,
                     snap_id, snap_id, q.qualified, q.score, q.tier, q.reason, "new", None,
                     q.stage, q.lead_score, q.hot, q.adult]
+                 + _history_values(hist.get(rec.source_record_id))
                  for rec, metro, q, _, _ in inserts],
                 returning=True)
             # Map ids by key rather than trusting result-set order.
@@ -235,6 +257,14 @@ def _apply(conn, source: Source, records: dict[str, Record], sr_id: int,
                    (record_id, source_run_id, event_type, observed_at, changes, queued)
                    VALUES (%s, %s, %s, %s, %s, %s)""", events)
         res.queued = sum(1 for e in events if e[5])
+
+
+_HISTORY_SET = ", venue_history=%s, prior_licenses=%s, prior_since=%s"
+
+
+def _history_values(h) -> list:
+    """(venue_history, prior_licenses, prior_since) for a History or None."""
+    return [h.label, h.prior_licenses, h.prior_since] if h else [None, None, None]
 
 
 def _old_stage(source: Source, srid: str, old: dict) -> str | None:

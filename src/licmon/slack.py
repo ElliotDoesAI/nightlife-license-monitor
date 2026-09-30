@@ -5,8 +5,9 @@ picked when the webhook is made). It posts only when the day has at least one
 new filing or stage-advanced lead; the email still covers quiet days.
 
 The message holds counts plus up to five Hot venue names with city and stage.
-No addresses, phones, owners or record links, and never an adult venue's
-name. It goes to the owner's own team channel, never to a business.
+No addresses, phones, owners or record links, and never the name of an
+adult venue or of a venue that is only adding a permit (history.py). A
+named venue changing hands says "New owner". It goes to the owner's own team channel, never to a business.
 
 The message text never goes to public Actions logs: callers log counts and
 "posted" / "skipped" / "failed (<ErrorType>)" only.
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import os
 
+from .history import ADDING_PERMIT, NEW_OWNER
 from .leadsheet import NEW_FILING, STAGE_ADVANCED
 
 MAX_HOT_NAMES = 5
@@ -47,7 +49,9 @@ def compose(rows: list[dict], attio_counts: dict | None = None,
             attio_url: str | None = None) -> str:
     """The message text. Hot is counted on its own; A means A and not Hot."""
     hot = [r for r in rows if r.get("hot")]
-    named = [r for r in hot if not r.get("adult")]  # adult venues are never named
+    # Adult venues and venues only adding a permit are never named.
+    named = [r for r in hot if not r.get("adult")
+             and r.get("venue_history") != ADDING_PERMIT]
     buckets = [("Hot", len(hot))] + [
         (tier, sum(1 for r in rows if r.get("priority") == tier and not r.get("hot")))
         for tier in ("A", "B", "C")]
@@ -59,7 +63,10 @@ def compose(rows: list[dict], attio_counts: dict | None = None,
         names = []
         for r in named[:MAX_HOT_NAMES]:
             where = ", ".join(p for p in (r.get("business_name"), r.get("city")) if p)
-            names.append(_esc(where) + (f" ({_esc(r['stage'])})" if r.get("stage") else ""))
+            notes = [r["stage"]] if r.get("stage") else []
+            if r.get("venue_history") == NEW_OWNER:
+                notes.append(NEW_OWNER)
+            names.append(_esc(where) + (f" ({_esc(', '.join(notes))})" if notes else ""))
         more = len(named) - MAX_HOT_NAMES
         lines.append("Hot: " + " · ".join(names) + (f" · and {more} more" if more > 0 else ""))
 

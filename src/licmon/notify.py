@@ -2,7 +2,8 @@
 
 The email body never contains lead data: no names, addresses, phones, links
 to records, or record ids. All detail lives ONLY in the attached Excel
-workbook built by ``licmon.leadsheet`` (New, All open, one tab per state).
+workbook built by ``licmon.leadsheet`` (New, Existing venues, All open, one
+tab per state).
 
 Public Actions logs must never contain lead data, email addresses or SMTP
 credentials. This module logs nothing with values in it: senders report only
@@ -149,6 +150,9 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     count_b = sum(1 for lead in leads if _priority_of(lead) == "B")
     count_c = sum(1 for lead in leads if _priority_of(lead) == "C")
     count_hot = sum(1 for lead in leads if lead.get("hot"))
+    count_existing = sum(1 for lead in leads if leadsheet.is_existing(lead))
+    existing_line = (f"Existing venues (new owner or adding a permit): {count_existing}, "
+                     "on the Existing venues tab." if count_existing else None)
     failed = sum(1 for s in sources if s.get("status") == "failed")
 
     if total == 0:
@@ -175,6 +179,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
             f"Nightclubs, lounges and ticketed venues (A): {count_a}",
             f"Bars and event venues (B): {count_b}",
             f"Restaurants (C): {count_c}",
+            *([existing_line] if existing_line else []),
             "",
             f"By market: {market_text}",
             "",
@@ -195,7 +200,8 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
         h.append(f"<p>{e(f'Hot (best fit, call first): {count_hot}')}<br>"
                  f"{e(f'Nightclubs, lounges and ticketed venues (A): {count_a}')}<br>"
                  f"{e(f'Bars and event venues (B): {count_b}')}<br>"
-                 f"{e(f'Restaurants (C): {count_c}')}</p>")
+                 f"{e(f'Restaurants (C): {count_c}')}"
+                 + (f"<br>{e(existing_line)}" if existing_line else "") + "</p>")
         h.append(f"<p>{e(f'By market: {market_text}')}</p>")
     h.append(f"<p>{e(source_line)}</p>")
     h.append(f"<p>{e(FOOTER)}</p>")

@@ -28,6 +28,31 @@ per source, never names or addresses.
 | `ca_abc_applications` | CA ABC Daily Data Export (CSV zip), application rows only | full list, statewide |
 | `fl_abt_licenses` | FL DBPR ABT retail alcoholic beverage licensee extract `bd4006lic.csv` | full licensee list, statewide; leads are **newly issued** licenses (Florida publishes no pending list) |
 
+### Venue history, per source
+
+Each qualified lead is labeled **New venue**, **New owner**, **Adding a
+permit** or **Unknown** by comparing it with the state's own list of
+existing licenses (`src/licmon/history.py`, `Source.venue_history`):
+
+| Source | How it checks |
+|---|---|
+| `tx_tabc_pending` | TABC License Information, data.texas.gov `7hf9-qc9f`: licenses at the premises, owner id `master_file_id`; subordinate permits whose `primary_license_id` is an existing license |
+| `ny_sla_pending` | SLA Active Licenses `9s3h-dpkz` and Inactive Licenses `6dg3-2z7i` on data.ny.gov, by legal name |
+| `chicago_bacp_liquor` | expansion and change-of-activity filings are Adding a permit; others are checked against `r5kz-chrr` itself, owner id = account number |
+| `chicago_bacp_pending` | `r5kz-chrr` by city and street (the list has no ZIP), owner id = the account in the ownership link |
+| `ca_abc_applications` | the export's own `LIC` rows at the premises |
+| `fl_abt_licenses` | the extract's own other rows at the premises; a license listed twice under two owners is a transfer (New owner) |
+| `wa_lcb_actions` | its Application Type only (ASSUMPTION = New owner, ADDED/CHANGE OF CLASS/IN LIEU = Adding a permit); everything else Unknown, because WA publishes no full list of existing retail licenses |
+
+Rules: a prior license counts if it is current or ended within two years.
+Same owner (id, or legal name without LLC/INC/CORP and punctuation; trade
+names are never compared) with a current or recent license there is Adding
+a permit; another owner is New owner; nothing is New venue. The same owner's
+licenses issued after the filing are the venue's own and do not count. The
+address must have the same house number, street, ZIP (or city) and suite;
+floors are ignored. Only the label, a count of prior licenses and the
+earliest prior issue date are stored, never other businesses' names.
+
 The California HTML daily report is behind bot protection, so it is not used.
 The official daily export carries the same applications. Per-record CA links
 point at ABC's public license lookup page for a human to open.
@@ -56,19 +81,26 @@ point at ABC's public license lookup page for a human to open.
    Hot label (tier A, not adult, score 75 or more). A is nightclubs, lounges
    and ticketed venues (comedy, live music, sports, theaters, event venues);
    adult venues are marked but never Hot. The points table is in AGENTS.md.
-6. Qualified new or changed records are queued. A change whose stage moves
+6. Venue history is looked up for the qualified new and changed records
+   (a few hundred a day, batched queries). New owner loses 10 points and is
+   never Hot; Adding a permit loses 15, is never Hot, never goes to Attio
+   and is never named in Slack. A failed lookup logs
+   `history FAILED <source> (<ErrorType>)`, leaves those leads Unknown and
+   keeps the run green.
+7. Qualified new or changed records are queued. A change whose stage moves
    up is marked in `record_events.changes` and shows as "Stage advanced".
    A source's very first run is a
    silent baseline except for applications dated in the last 14 days.
-7. A failing source is logged, stored with its traceback in `source_runs`, does
+8. A failing source is logged, stored with its traceback in `source_runs`, does
    not stop the others, and makes the workflow exit non-zero (red run + email).
-8. `licmon email` sends the owner the day's `daily_leads`: counts by metro and
+9. `licmon email` sends the owner the day's `daily_leads`: counts by metro and
    priority, source health, and an Excel file of every lead (the body holds
    no lead details). It sends on empty days too (heartbeat) and skips itself when the SMTP
    secrets are not set. `licmon email --preview DIR` writes the message to
    files instead of sending.
-9. `licmon attio-sync --write` adds the day's Hot and A venues, and B venues
-   scoring `ATTIO_MIN_B_SCORE` (60) or more, never adult ones, to the Attio
+10. `licmon attio-sync --write` adds the day's Hot and A venues, and B venues
+   scoring `ATTIO_MIN_B_SCORE` (60) or more, never adult ones or ones only
+   adding a permit, to the Attio
    "License Leads" list on the Targets object (reusing a Target with the
    same name, else making a minimal one), and `licmon slack` pings the team's Slack
    channel when there is a new or stage-advanced lead. Both skip themselves
@@ -90,6 +122,7 @@ uv run licmon export --all --open --out open.xlsx
 uv run licmon review 123 456 --status approved --note "call next week"
 uv run licmon email --preview ~/Desktop/email-preview   # see the daily email
 uv run licmon requalify                    # after editing qualify.py / metros.py
+uv run licmon requalify --history          # also look up venue history again (network)
 uv run licmon attio-sync                   # dry run: what would go to Attio (counts)
 uv run licmon slack --preview              # print today's Slack message here
 ```
@@ -105,13 +138,17 @@ writes the Excel workbook, anything else writes the New sheet as CSV.
 
 Tabs, each sorted by score, highest first:
 
-* **New**: the leads asked for (today by default, or `--date` / `--all`).
+* **New**: the leads asked for (today by default, or `--date` / `--all`)
+  whose venue history is New venue or Unknown.
+* **Existing venues**: the same day's New owner and Adding a permit leads,
+  with a line saying these venues have been open before.
 * **All open**: every lead not yet reviewed, from all days.
 * **One tab per state** that has open leads (from the data, not a fixed list).
 * **How scoring works**: the points table and what each label means.
 
 Columns: Priority, Hot, Score, Business name, What's new (New filing, Stage
-advanced or Details changed), Company / owner, Business type, Filing, Stage,
+advanced or Details changed), Company / owner, Business type, Filing, Venue
+history, Stage,
 Filed on, Phone, Owner / applicant names, Address, City, State, ZIP, Market,
 Mailing address, License applied for, Map, Google, Instagram, Official
 record, Lead ID. The All open and state tabs show Queued on in place of
@@ -135,7 +172,7 @@ the run stays green. Settings and troubleshooting live in AGENTS.md.
 ## Repo layout
 
 ```text
-src/licmon/          pipeline, qualification, stage, spreadsheet, email, Attio, Slack, CLI
+src/licmon/          pipeline, qualification, stage, venue history, spreadsheet, email, Attio, Slack, CLI
 src/licmon/sources/  one connector per official source
 .github/workflows/  daily-collect (daily.yml), tests (ci.yml), probe (probe.yml)
 tests/               deterministic tests with synthetic fixtures only
@@ -183,5 +220,6 @@ synthetic fixtures only. Never use the real database or commit real records.
 Write `src/licmon/sources/<name>.py` with a `Source` subclass (`fetch` returns
 raw snapshots untouched, `parse` yields `Record`s with a `category`, `stage`
 maps the source's status wording, `nightlife_license` names its nightlife
-license types), register it in `sources/__init__.py`, add metro counties/cities in `metros.py` if it is a
+license types, `venue_history` checks the state's list of existing licenses
+or returns nothing for Unknown), register it in `sources/__init__.py`, add metro counties/cities in `metros.py` if it is a
 new state, and add a test with a synthetic fixture. Nothing else changes.

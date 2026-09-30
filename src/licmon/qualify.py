@@ -30,6 +30,10 @@ ticketing fit: venue tier, nightlife license, licensing stage, filing type.
 (default 75).
 Hot is a label on top of A/B/C, not a fourth tier.
 
+Venue history (history.py) adjusts the lead score last: New owner -10 and
+never Hot; Adding a permit -15 and never Hot (it also never goes to Attio
+or Slack). New venue and Unknown change nothing.
+
 Stage and nightlife-license signals come from each source (Source.stage,
 Source.nightlife_license in sources/base.py); the points table below is
 shared by every state.
@@ -334,10 +338,22 @@ def lead_score(tier: str, license_keys, stage: str | None, stage_counts: bool,
     return min(points, 100)
 
 
+def apply_history(q: Qualification, label: str | None) -> Qualification:
+    """Adjust a qualified record for its venue history (history.py labels):
+    New owner and Adding a permit lose points and are never Hot."""
+    from . import history
+
+    if q.qualified and label in history.SCORE_ADJUST:
+        q.lead_score = max(0, q.lead_score + history.SCORE_ADJUST[label])
+        q.hot = False
+    return q
+
+
 def qualify(rec: Record, metro: str | None, source=None,
-            today: date | None = None) -> Qualification:
+            today: date | None = None, history: str | None = None) -> Qualification:
     """Gate, tier, qualification score, then stage and lead score.
-    `source` defaults to the registered Source named rec.source."""
+    `source` defaults to the registered Source named rec.source. `history`
+    is the record's venue history label, if known (apply_history)."""
     src = _source_for(rec, source)
     license_keys = src.nightlife_license(rec) if src else ()
     q = _qualify(rec, metro, license_keys)
@@ -350,7 +366,7 @@ def qualify(rec: Record, metro: str | None, source=None,
         q.adult = bool(ADULT_WORDS.search(
             " ".join(x for x in (rec.dba, rec.legal_name) if x).upper()))
         q.hot = q.tier == "A" and not q.adult and q.lead_score >= hot_min_score()
-    return q
+    return apply_history(q, history)
 
 
 def _qualify(rec: Record, metro: str | None, license_keys=()) -> Qualification:

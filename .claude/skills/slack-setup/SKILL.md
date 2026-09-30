@@ -19,7 +19,8 @@ Added to Attio: 8 new, 2 updated (3 B) · Full list in today's email.  <link to 
 ```
 
 At most five Hot names, with city and stage only: no addresses, phones or
-owners, and never an adult venue. "(3 B)" is how many of the Attio
+owners, and never an adult venue or a venue only adding a permit. A venue
+changing hands says "New owner" after its stage. "(3 B)" is how many of the Attio
 additions are B leads. The GitHub log says `slack posted: N leads (N hot)` or `skipped`,
 never the message.
 

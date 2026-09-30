@@ -25,6 +25,18 @@ zeros>``. Verified in a browser 2026-09-29 (renders the application's owner,
 business name and address). The page sits behind Cloudflare bot protection,
 so the pipeline never fetches it; it is only a link for the human reviewer.
 The raw export URL is kept in ``raw["export_url"]``.
+
+Venue history (``venue_history``): the export has no filing type, but the
+same file lists existing licenses (``LIC`` rows: Type Status ACTIVE, SUREND,
+REVPEN, SUSPEN, PEND, R64B; Type Orig Iss Date and Expir Date as
+``12-JUN-2027``; verified 2026-09-30). A lead's premises is compared with
+the LIC rows at that address, one prior per file number. ACTIVE, SUSPEN
+(suspended) and REVPEN (revocation pending) licenses are still held; others
+ended on their Expir Date. A LIC row with the application's own file number
+is the application's own license and is left out unless its owner differs
+(a transfer that kept the file number). On 2026-09-30 about 60% of the
+15.6k application file numbers had no license at the address, 34% had an
+active one under another owner, 5% under the same owner.
 """
 
 from __future__ import annotations
@@ -33,10 +45,11 @@ import csv
 import io
 import zipfile
 from collections.abc import Iterable
+from datetime import date
 
-from .. import stage
+from .. import history, stage
 from ..http import Http
-from ..models import CATEGORIES, Record, Snapshot
+from ..models import CATEGORIES, Record, Snapshot, parse_date
 from .base import Source
 
 EXPORT_URL = "https://www.abc.ca.gov/wp-content/uploads/DailyExport-CSV.zip"
@@ -251,35 +264,44 @@ class CaAbcSource(Source):
     def fetch(self, http: Http) -> list[Snapshot]:
         return [http.get(EXPORT_URL)]
 
+    def venue_history(self, http: Http, records: list[Record],
+                      snapshots: list[Snapshot] | None = None,
+                      today: date | None = None) -> dict:
+        today = today or date.today()
+        records = [r for r in records if r.zip and history.parse_address(r.address)]
+        if not records:
+            return {}
+        wanted = {_near_key(r.address, r.zip) for r in records}
+        files: dict[str, list[dict]] = {}
+        for snapshot in snapshots or self.fetch(http):
+            for row in _export_rows(snapshot):
+                if _clean(row.get("Lic or App")) != "LIC":
+                    continue
+                if _near_key(_row_address(row), row.get("Prem Zip")) in wanted:
+                    files.setdefault(_clean(row.get("File Number")) or "", []).append(row)
+        licenses: dict[tuple, list] = {}
+        for rows in files.values():
+            key = _near_key(_row_address(rows[0]), rows[0].get("Prem Zip"))
+            licenses.setdefault(key, []).append((rows[0], license_prior(rows)))
+        out = {}
+        for rec in records:
+            candidates = [(row, p) for row, p in licenses.get(_near_key(rec.address, rec.zip), [])
+                          if not (p.license_id == rec.source_record_id
+                                  and history.same_owner(p.owner, None, rec.legal_name, None))]
+            priors = history.match_priors(
+                rec, candidates,
+                lambda row: (_row_address(row), row.get("Prem Zip"), row.get("Prem City")))
+            out[rec.source_record_id] = history.classify(
+                rec.legal_name, None, rec.application_date, priors, today)
+        return out
+
     def parse(self, snapshots: list[Snapshot]) -> Iterable[Record]:
         for snapshot in snapshots:
             yield from self._parse_snapshot(snapshot)
 
     def _parse_snapshot(self, snapshot: Snapshot) -> Iterable[Record]:
-        with zipfile.ZipFile(io.BytesIO(snapshot.body)) as archive:
-            names = archive.namelist()
-            csv_names = [n for n in names if n.lower().endswith(".csv")]
-            picked = csv_names[0] if csv_names else (names[0] if names else None)
-            if picked is None:
-                return
-            raw_bytes = archive.read(picked)
-        # utf-8-sig consumes the BOM; replace keeps one bad byte from
-        # killing a ~28 MB file.
-        text = raw_bytes.decode("utf-8-sig", errors="replace")
-        stream = io.StringIO(text)
-        first = stream.readline()
-        if "File Number" not in first:
-            # Title line (e.g. '"Updated Monday ..."' ); header follows.
-            pass
-        else:  # pragma: no cover - defensive; real exports carry a title
-            stream = io.StringIO(text)
-        reader = csv.DictReader(stream)
-        if not reader.fieldnames:
-            return
-        reader.fieldnames = [(h or "").strip() for h in reader.fieldnames]
-
         groups: dict[str, list[dict]] = {}
-        for row in reader:
+        for row in _export_rows(snapshot):
             lic_or_app = _clean(row.get("Lic or App"))
             if lic_or_app != "APP":
                 continue
@@ -326,3 +348,50 @@ class CaAbcSource(Source):
                 category=categorize(codes),
                 raw={"export_url": EXPORT_URL, "rows": rows},
             )
+
+
+def _export_rows(snapshot: Snapshot) -> Iterable[dict]:
+    """Every data row of the export (APP and LIC), header names stripped."""
+    with zipfile.ZipFile(io.BytesIO(snapshot.body)) as archive:
+        names = archive.namelist()
+        csv_names = [n for n in names if n.lower().endswith(".csv")]
+        picked = csv_names[0] if csv_names else (names[0] if names else None)
+        if picked is None:
+            return
+        raw_bytes = archive.read(picked)
+    # utf-8-sig consumes the BOM; replace keeps one bad byte from
+    # killing a ~28 MB file.
+    text = raw_bytes.decode("utf-8-sig", errors="replace")
+    stream = io.StringIO(text)
+    first = stream.readline()
+    if "File Number" in first:  # pragma: no cover - real exports carry a title
+        stream = io.StringIO(text)
+    reader = csv.DictReader(stream)
+    if not reader.fieldnames:
+        return
+    reader.fieldnames = [(h or "").strip() for h in reader.fieldnames]
+    yield from reader
+
+
+def _row_address(row: dict) -> str | None:
+    parts = [_clean(row.get("Prem Addr 1")), _clean(row.get("Prem Addr 2"))]
+    return " ".join(p for p in parts if p) or None
+
+
+def _near_key(address: str | None, zip_code: str | None) -> tuple:
+    return ((zip_code or "").strip()[:5], history.house_number(address))
+
+
+#: LIC Type Status values for a license that is still held.
+HELD_STATUSES = {"ACTIVE", "SUSPEN", "REVPEN"}
+
+
+def license_prior(rows: list[dict]) -> history.Prior:
+    """One file number's LIC rows as a history.Prior (memory only)."""
+    active = any(_clean(r.get("Type Status")) in HELD_STATUSES for r in rows)
+    issued = [d for d in (parse_date(_clean(r.get("Type Orig Iss Date"))) for r in rows) if d]
+    ends = [d for d in (parse_date(_clean(r.get("Expir Date"))) for r in rows) if d]
+    return history.Prior(license_id=_clean(rows[0].get("File Number")),
+                         owner=_clean(rows[0].get("Primary Name")), active=active,
+                         issued=min(issued) if issued else None,
+                         ended=None if active or not ends else max(ends))

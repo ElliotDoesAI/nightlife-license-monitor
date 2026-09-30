@@ -25,7 +25,7 @@ LEAD_COLUMNS = [
     "application_types", "statuses", "application_date", "event_types",
     "source", "source_record_ids", "source_url", "first_seen_at", "qualify_reason",
     "review_status", "review_notes", "record_ids", "stage", "lead_score", "hot",
-    "adult",
+    "adult", "venue_history", "prior_licenses", "prior_since",
 ]
 RECORD_EXPORT_COLUMNS = [
     "queue_date", "event_type", "tier", "score", "legal_name", "dba",
@@ -33,7 +33,7 @@ RECORD_EXPORT_COLUMNS = [
     "status", "application_date", "address", "city", "state", "zip", "county",
     "metro", "source", "source_url", "first_seen_at", "qualify_reason",
     "review_status", "review_notes", "changes", "record_id", "stage", "lead_score",
-    "hot", "adult",
+    "hot", "adult", "venue_history", "prior_licenses", "prior_since",
 ]
 REVIEW_STATUSES = ("new", "approved", "rejected", "contacted", "snoozed")
 
@@ -234,37 +234,86 @@ def cmd_review(args) -> int:
     return 0 if n else 1
 
 
-def cmd_requalify(args) -> int:
-    """Re-run the rules on stored records after editing qualify.py/metros.py.
-    Does not add anything to past queues."""
-    cols = ("id", "source", "source_record_id", "source_url", "legal_name", "dba",
-            "license_type", "license_description", "application_type", "status",
-            "application_date", "address", "city", "state", "zip", "county", "category")
-    # raw is not needed to requalify
-    changed = 0
-    with db.connect() as conn:
-        db.init_schema(conn)  # new score columns may not exist yet
-    with db.connect() as conn, conn.cursor() as cur:
+_REQUALIFY_COLS = ("id", "source", "source_record_id", "source_url", "legal_name", "dba",
+                   "license_type", "license_description", "application_type", "status",
+                   "application_date", "address", "city", "state", "zip", "county",
+                   "category")
+
+
+def refresh_history(conn, today: date | None = None, http=None) -> int:
+    """Look up venue history again for every stored qualified record (needs
+    network) and save it. Returns how many records were checked. Logs counts
+    only; a failed source leaves its records Unknown."""
+    from . import history
+    from .http import Http
+    from .sources import all_sources
+
+    today = today or datetime.now(timezone.utc).date()
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {', '.join(_REQUALIFY_COLS)}, raw FROM records "
+                    "WHERE qualified")
+        rows = cur.fetchall()
+    by_source: dict[str, list] = {}
+    ids = {}
+    for row in rows:
+        d = dict(zip(_REQUALIFY_COLS, row[:-1]))
+        rid = d.pop("id")
+        rec = Record(**d, raw=row[-1] or {})
+        by_source.setdefault(rec.source, []).append(rec)
+        ids[(rec.source, rec.source_record_id)] = rid
+    http = http or Http()
+    updates = []
+    for source in all_sources():
+        recs = by_source.get(source.name) or []
+        found = history.lookup(source, http, recs, None, today)
+        updates += [(h.label, h.prior_licenses, h.prior_since, ids[(source.name, srid)])
+                    for srid, h in found.items()]
+    with conn.cursor() as cur:
+        cur.executemany("UPDATE records SET venue_history=%s, prior_licenses=%s, "
+                        "prior_since=%s WHERE id=%s", updates)
+    conn.commit()
+    return len(updates)
+
+
+def requalify(conn, today: date | None = None) -> int:
+    """Re-run the rules on every stored record, applying its stored venue
+    history. Returns how many records changed."""
+    today = today or datetime.now(timezone.utc).date()
+    cols = _REQUALIFY_COLS  # raw is not needed to requalify
+    with conn.cursor() as cur:
         cur.execute(f"SELECT {', '.join(cols)}, qualified, score, tier, qualify_reason, "
-                    "metro, venue_key, stage, lead_score, hot, adult FROM records")
+                    "metro, venue_key, stage, lead_score, hot, adult, venue_history "
+                    "FROM records")
         updates = []
-        today = datetime.now(timezone.utc).date()
         for row in cur.fetchall():
             d = dict(zip(cols, row))
             rid = d.pop("id")
             rec = Record(**d)
             metro = assign_metro(rec.state, rec.county, rec.city)
-            q = qualify(rec, metro, today=today)
+            q = qualify(rec, metro, today=today, history=row[-1])
             vk = venue_key(rec)
             new = (q.qualified, q.score, q.tier, q.reason, metro, vk, q.stage,
                    q.lead_score, q.hot, q.adult)
-            if new != tuple(row[len(cols):]):
+            if new != tuple(row[len(cols):-1]):
                 updates.append(new + (rid,))
         cur.executemany("UPDATE records SET qualified=%s, score=%s, tier=%s, "
                         "qualify_reason=%s, metro=%s, venue_key=%s, stage=%s, "
                         "lead_score=%s, hot=%s, adult=%s WHERE id=%s", updates)
-        changed = len(updates)
-        conn.commit()
+    conn.commit()
+    return len(updates)
+
+
+def cmd_requalify(args) -> int:
+    """Re-run the rules on stored records after editing qualify.py/metros.py.
+    --history also looks up venue history again first (network). Does not
+    add anything to past queues."""
+    with db.connect() as conn:
+        db.init_schema(conn)  # new score columns may not exist yet
+    with db.connect() as conn:
+        if args.history:
+            checked = refresh_history(conn)
+            print(f"venue history checked for {checked} qualified record(s)")
+        changed = requalify(conn)
     print(f"requalified {changed} record(s)")
     return 0
 
@@ -319,14 +368,18 @@ def cmd_attio_sync(args) -> int:
     verb = "" if args.write else "would be "
     log.info("attio sync%s: %d candidates (%d hot); list entries %sadded %d, %supdated %d; "
              "new Targets %d, existing Targets reused %d; skipped over daily cap %d; "
-             "B leads sent %d; priority options added %d; B leads held back %d",
+             "B leads sent %d; priority options added %d; B leads held back %d; "
+             "adding-a-permit venues left out %d; venue history field added %d",
              "" if args.write else " (dry run)", counts["candidates"], counts["hot"],
              verb, counts["added"], verb, counts["updated"], counts["created"],
              counts["reused"], counts["skipped"], counts["b"], counts["options_added"],
-             counts["b_held"])
+             counts["b_held"], counts["permits_left_out"], counts["history_field_added"])
     if counts["b_held"]:
         log.warning("attio: priority option B is missing and this key cannot add it "
                     "(needs list_configuration:read-write); B leads wait until it exists")
+    if counts["history_field_missing"]:
+        log.warning("attio: the Venue history field is missing and this key cannot add "
+                    "it (needs list_configuration:read-write); synced without it")
     return 0
 
 
@@ -403,8 +456,11 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--note")
     v.set_defaults(func=cmd_review)
 
-    sub.add_parser("requalify", help="re-apply qualification rules").set_defaults(
-        func=cmd_requalify)
+    q = sub.add_parser("requalify", help="re-apply qualification rules")
+    q.add_argument("--history", action="store_true",
+                   help="also look up venue history again for qualified records "
+                        "(network, a few minutes)")
+    q.set_defaults(func=cmd_requalify)
 
     a = sub.add_parser("attio-setup", help="create the License Leads list on Targets in "
                                            "Attio (dry run unless --write)")

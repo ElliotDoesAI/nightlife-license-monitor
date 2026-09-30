@@ -5,9 +5,10 @@ themselves publish (see Source.contact). No automatic outside lookups: the
 Map, Google and Instagram columns are plain search links the owner clicks by
 hand to find a phone number, website or social account.
 
-The workbook (build_workbook) has a New tab, an All open tab, one tab per
-state that has open leads, and a How scoring works tab. Every tab sorts by
-lead score, highest first.
+The workbook (build_workbook) has a New tab (new venues and unknown
+history), an Existing venues tab (new owner or adding a permit), an All open
+tab, one tab per state that has open leads, and a How scoring works tab.
+Every tab sorts by lead score, highest first.
 
 Local and email use only. Never print rows in GitHub Actions (public logs).
 """
@@ -20,6 +21,7 @@ import re
 from datetime import date, datetime
 from urllib.parse import quote_plus
 
+from . import history as history_mod
 from . import stage as stage_mod
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -34,6 +36,7 @@ COLUMNS: list[tuple[str, str, int]] = [
     ("company", "Company / owner", 34),
     ("business_type", "Business type", 32),
     ("filing", "Filing", 18),
+    ("venue_history", "Venue history", 16),
     ("stage", "Stage", 11),
     ("filed_on", "Filed on", 12),
     ("phone", "Phone", 16),
@@ -200,7 +203,7 @@ SELECT q.queue_date, q.record_id, q.venue_key, q.tier, q.score, q.legal_name,
        q.application_date, q.address, q.city, q.state, q.zip, q.metro,
        q.source, q.source_url, r.category, r.raw, q.event_type, q.changes,
        q.review_status, q.stage, q.lead_score, q.hot, q.license_type,
-       q.first_seen_at, q.adult
+       q.first_seen_at, q.adult, q.venue_history, q.prior_licenses, q.prior_since
 FROM review_queue q JOIN records r ON r.id = q.record_id
 WHERE r.qualified
   AND (%(day)s::date IS NULL OR q.queue_date = %(day)s)
@@ -211,7 +214,8 @@ _FIELDS = ["queue_date", "record_id", "venue_key", "tier", "score", "legal_name"
            "license_description", "application_type", "status", "application_date",
            "address", "city", "state", "zip", "metro", "source", "source_url",
            "category", "raw", "event_type", "changes", "review_status", "stage",
-           "lead_score", "hot", "license_type", "first_seen_at", "adult"]
+           "lead_score", "hot", "license_type", "first_seen_at", "adult",
+           "venue_history", "prior_licenses", "prior_since"]
 
 
 def load_rows(conn, day: date | None, open_only: bool = False) -> list[dict]:
@@ -252,6 +256,7 @@ def group_records(records: list[dict]) -> list[dict]:
         map_q = " ".join(p for p in (name, address) if p)
         web_q = " ".join(p for p in (name, top.get("city"), top.get("state")) if p)
         seen = [r["first_seen_at"] for r in recs if r.get("first_seen_at")]
+        since = [r["prior_since"] for r in recs if r.get("prior_since")]
         rows.append({
             "queue_date": queue_date,
             "venue_key": top.get("venue_key"),
@@ -267,6 +272,11 @@ def group_records(records: list[dict]) -> list[dict]:
             "business_type": _business_type(min((r.get("tier") or "C") for r in recs), cats,
                                             any(r.get("adult") for r in recs)),
             "filing": _filing(_uniq(r.get("application_type") for r in recs), top["source"]),
+            # Not checked yet (stored before the check existed) reads Unknown.
+            "venue_history": history_mod.best(r.get("venue_history") or history_mod.UNKNOWN
+                                              for r in recs),
+            "prior_licenses": max((r.get("prior_licenses") or 0) for r in recs),
+            "prior_since": min(since) if since else None,
             "stage": _stage(recs, by_source),
             "filed_on": min(dates) if dates else None,
             "phone": ", ".join(_uniq(_phone(c.get("phone")) for c in contacts)) or None,
@@ -326,14 +336,27 @@ def build_xlsx(rows: list[dict], title: str = "Leads") -> bytes:
     return _save(wb)
 
 
+EXISTING_NOTE = ("These venues have been open before. They are changing owner or adding "
+                 "a permit, so they are not new venues.")
+
+
+def is_existing(row: dict) -> bool:
+    """New owner or Adding a permit: the venue has been around."""
+    return row.get("venue_history") in history_mod.EXISTING
+
+
 def build_workbook(new_rows: list[dict], open_rows: list[dict] | None = None) -> bytes:
-    """The owner's workbook: New, All open, one tab per state with open
-    leads (from the data, not a fixed list), then How scoring works."""
+    """The owner's workbook: New (new venues and unknown history), Existing
+    venues (new owner or adding a permit), All open, one tab per state with
+    open leads (from the data, not a fixed list), then How scoring works."""
     from openpyxl import Workbook
 
     open_rows = sorted(open_rows or [], key=sort_key)
+    new_rows = sorted(new_rows, key=sort_key)
     wb = Workbook()
-    _write_sheet(wb.active, sorted(new_rows, key=sort_key), COLUMNS, "New")
+    _write_sheet(wb.active, [r for r in new_rows if not is_existing(r)], COLUMNS, "New")
+    _write_sheet(wb.create_sheet(), [r for r in new_rows if is_existing(r)], COLUMNS,
+                 "Existing venues", note=EXISTING_NOTE)
     _write_sheet(wb.create_sheet(), open_rows, OPEN_COLUMNS, "All open")
     for state in sorted({r.get("state") or "Other" for r in open_rows}):
         _write_sheet(wb.create_sheet(),
@@ -350,18 +373,24 @@ def _save(wb) -> bytes:
 
 
 def _write_sheet(ws, rows: list[dict], columns: list[tuple[str, str, int]],
-                 title: str) -> None:
+                 title: str, note: str | None = None) -> None:
+    """One tab. A `note` goes in row 1 above the header."""
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     ws.title = re.sub(r"[\[\]:*?/\\]", "-", title)[:31] or "Leads"
+    top = 1
+    if note:
+        ws.append([note])
+        ws.cell(row=1, column=1).font = Font(italic=True)
+        top = 2
     ws.append([h for _, h, _ in columns])
     head_fill = PatternFill("solid", fgColor="1F2937")
-    for cell in ws[1]:
+    for cell in ws[top]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = head_fill
         cell.alignment = Alignment(vertical="center")
-    ws.row_dimensions[1].height = 22
+    ws.row_dimensions[top].height = 22
     fills = {"A": PatternFill("solid", fgColor="D1FAE5"),
              "B": PatternFill("solid", fgColor="FEF3C7"),
              "C": PatternFill("solid", fgColor="F3F4F6")}
@@ -370,7 +399,7 @@ def _write_sheet(ws, rows: list[dict], columns: list[tuple[str, str, int]],
     link_cols = {"map_url": "Map", "google_url": "Search", "instagram_url": "Search",
                  "record_url": "Record"}
     keys = [key for key, _, _ in columns]
-    for i, row in enumerate(rows, start=2):
+    for i, row in enumerate(rows, start=top + 1):
         for j, key in enumerate(keys, start=1):
             value = _cell(row.get(key))
             cell = ws.cell(row=i, column=j)
@@ -396,8 +425,9 @@ def _write_sheet(ws, rows: list[dict], columns: list[tuple[str, str, int]],
             hot.font = Font(bold=True, color="B91C1C")
     for j, (_, _, width) in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(j)].width = width
-    ws.freeze_panes = f"{get_column_letter(keys.index('business_name') + 2)}2"
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{max(1, len(rows) + 1)}"
+    ws.freeze_panes = f"{get_column_letter(keys.index('business_name') + 2)}{top + 1}"
+    ws.auto_filter.ref = (f"A{top}:{get_column_letter(len(columns))}"
+                          f"{max(top, len(rows) + top)}")
 
 
 def legend_lines() -> list[tuple[str, str]]:
@@ -432,6 +462,19 @@ def legend_lines() -> list[tuple[str, str]]:
         ("Change of owner", next(p for _, p, lab in q.FILING_POINTS
                                  if lab == "change of owner")),
         ("", ""),
+        ("Venue history", "Points"),
+        (history_mod.NEW_VENUE, "0. No license at this address before, or the last one "
+                                "ended more than two years ago."),
+        (history_mod.NEW_OWNER, f"{history_mod.SCORE_ADJUST[history_mod.NEW_OWNER]}. A "
+                                "different company holds or recently held a license here. "
+                                "Never Hot. Still goes to Attio."),
+        (history_mod.ADDING_PERMIT, f"{history_mod.SCORE_ADJUST[history_mod.ADDING_PERMIT]}. "
+                                    "The same company already holds a license here. Never "
+                                    "Hot, never sent to Attio or named in Slack."),
+        (history_mod.UNKNOWN, "0. The state publishes no license list we can check "
+                              "(Washington, except its own ownership and class filings), "
+                              "or the address has no street number or ZIP."),
+        ("", ""),
         ("Stages", ""),
         ("Licensed", "Issued or active. Florida counts only if issued in the last 60 days."),
         ("Approved", "Approved or conditional, not yet active."),
@@ -451,7 +494,9 @@ def legend_lines() -> list[tuple[str, str]]:
         (DETAILS_CHANGED, "Name, address, license or status changed."),
         ("", ""),
         ("Tabs", ""),
-        ("New", "The day's leads."),
+        ("New", "The day's leads: new venues and unknown history."),
+        ("Existing venues", "The day's leads at venues that have been open before: "
+                            "new owner or adding a permit."),
         ("All open", "Every lead not yet reviewed, from all days."),
         ("State tabs", "All open, split by state."),
     ]

@@ -279,3 +279,124 @@ def test_adult_flag_stored_in_views_and_sheet(pg, monkeypatch):
     assert adult["adult"] is True and adult["business_type"].endswith("(adult)")
     assert not adult["hot"] and lounge["hot"] == "Hot" and not lounge["adult"]
     db.init_schema(pg)
+
+
+class HistorySource(FakeSource):
+    """FakeSource whose venue history comes from a {id: label} map."""
+
+    def __init__(self, rows, labels, fail_history=False, **kw):
+        super().__init__(rows, **kw)
+        self.labels = labels
+        self.fail_history = fail_history
+        self.asked = []
+
+    def venue_history(self, http, records, snapshots=None, today=None):
+        from licmon.history import History
+
+        self.asked.append(sorted(r.source_record_id for r in records))
+        if self.fail_history:
+            raise RuntimeError("upstream down")
+        return {r.source_record_id: History(self.labels[r.source_record_id], 2,
+                                            date(2019, 5, 1))
+                for r in records if r.source_record_id in self.labels}
+
+
+def lounge_rows():
+    return [{"id": "40", "name": "Fake Velvet Lounge LLC", "date": "2026-08-31"},
+            {"id": "41", "name": "Fake Moon Lounge LLC", "date": "2026-08-31",
+             "address": "2 Test St"},
+            {"id": "42", "name": "Fake Star Lounge LLC", "date": "2026-08-31",
+             "address": "3 Test St"},
+            {"id": "43", "name": "Old Lounge LLC", "date": "2026-01-15",
+             "address": "4 Test St"}]
+
+
+def test_history_is_stored_scored_and_in_views(pg):
+    from licmon.history import ADDING_PERMIT, NEW_OWNER, NEW_VENUE
+
+    src = HistorySource(lounge_rows(), {"40": NEW_VENUE, "41": NEW_OWNER, "42": ADDING_PERMIT})
+    [res] = pipeline.run([src], conn=pg, http=object(), now=DAY1)
+    assert res.status == "success"
+    # only what reaches the queue is looked up (43 is a silent baseline)
+    assert src.asked == [["40", "41", "42"]]
+    with pg.cursor() as cur:
+        cur.execute("SELECT source_record_id, venue_history, prior_licenses, prior_since, "
+                    "lead_score FROM records ORDER BY 1")
+        got = cur.fetchall()
+    assert got == [("40", NEW_VENUE, 2, date(2019, 5, 1), 60),
+                   ("41", NEW_OWNER, 2, date(2019, 5, 1), 50),
+                   ("42", ADDING_PERMIT, 2, date(2019, 5, 1), 45),
+                   ("43", None, None, None, 60)]
+    with pg.cursor() as cur:
+        cur.execute("SELECT venue_history, prior_licenses FROM review_queue ORDER BY record_id")
+        assert [r[0] for r in cur.fetchall()] == [NEW_VENUE, NEW_OWNER, ADDING_PERMIT]
+        cur.execute("SELECT venue_history, prior_since FROM daily_leads ORDER BY lead_score DESC")
+        assert cur.fetchall()[0] == (NEW_VENUE, date(2019, 5, 1))
+
+
+def test_daily_leads_takes_the_best_history(pg):
+    from licmon.history import ADDING_PERMIT, NEW_OWNER
+
+    rows = [{"id": "50", "name": "Fake Velvet Lounge LLC", "date": "2026-08-31"},
+            {"id": "51", "name": "Fake Velvet Lounge LLC", "date": "2026-08-31"}]
+    src = HistorySource(rows, {"50": ADDING_PERMIT, "51": NEW_OWNER})
+    pipeline.run([src], conn=pg, http=object(), now=DAY1)
+    with pg.cursor() as cur:
+        cur.execute("SELECT venue_history, record_ids FROM daily_leads")
+        [(label, ids)] = cur.fetchall()
+    assert label == NEW_OWNER and len(ids.split()) == 2
+
+
+def test_history_failure_is_unknown_and_run_stays_green(pg, caplog):
+    import logging
+
+    src = HistorySource(lounge_rows()[:1], {}, fail_history=True)
+    with caplog.at_level(logging.INFO, logger="licmon"):
+        [res] = pipeline.run([src], conn=pg, http=object(), now=DAY1)
+    assert res.status == "success" and res.queued == 1
+    assert "history FAILED fake_tx (RuntimeError)" in caplog.text
+    assert "Velvet" not in caplog.text and "upstream down" not in caplog.text
+    with pg.cursor() as cur:
+        cur.execute("SELECT venue_history, lead_score FROM records")
+        assert cur.fetchall() == [("Unknown", 60)]
+
+
+def test_changed_record_gets_history_again(pg):
+    from licmon.history import NEW_OWNER, NEW_VENUE
+
+    rows = lounge_rows()[:1]
+    src = HistorySource(rows, {"40": NEW_VENUE})
+    pipeline.run([src], conn=pg, http=object(), now=DAY1)
+    rows[0]["status"] = "Approved"
+    src.labels = {"40": NEW_OWNER}
+    pipeline.run([src], conn=pg, http=object(), now=DAY2)
+    pipeline.run([src], conn=pg, http=object(), now=DAY3)  # unchanged: no lookup
+    assert src.asked == [["40"], ["40"]]
+    with pg.cursor() as cur:
+        cur.execute("SELECT venue_history, lead_score, hot FROM records")
+        # A 45 + Approved 20 + original 10 - 10 for a new owner
+        assert cur.fetchall() == [(NEW_OWNER, 65, False)]
+
+
+def test_requalify_applies_stored_history_and_refreshes_it(pg, monkeypatch):
+    from licmon import cli, sources
+    from licmon.history import ADDING_PERMIT, NEW_OWNER
+
+    src = HistorySource(lounge_rows()[:2], {})
+    pipeline.run([src], conn=pg, http=object(), now=DAY1)
+    with pg.cursor() as cur:
+        cur.execute("UPDATE records SET venue_history=%s WHERE source_record_id='40'",
+                    (ADDING_PERMIT,))
+    pg.commit()
+    assert cli.requalify(pg, today=DAY1.date()) == 1
+    with pg.cursor() as cur:
+        cur.execute("SELECT source_record_id, lead_score FROM records ORDER BY 1")
+        assert cur.fetchall() == [("40", 45), ("41", 60)]
+    # --history: look up again (fake source registered in place of the real ones)
+    src.labels = {"40": NEW_OWNER, "41": NEW_OWNER}
+    monkeypatch.setattr(sources, "all_sources", lambda: [src])
+    assert cli.refresh_history(pg, today=DAY1.date(), http=object()) == 2
+    cli.requalify(pg, today=DAY1.date())
+    with pg.cursor() as cur:
+        cur.execute("SELECT source_record_id, venue_history, lead_score FROM records ORDER BY 1")
+        assert cur.fetchall() == [("40", NEW_OWNER, 50), ("41", NEW_OWNER, 50)]

@@ -123,6 +123,7 @@ is) and a **Stage** (Licensed, Approved, In review, Received):
 | Nightlife license (highest counts) | Chicago PPA 20; late hours (TX `LH`, Chicago Late Hour) 15; CA 48 public premises 15; music venue or concert hall (CA 90, NY) 15; night club or cabaret (NY, WA) 15; theater or performing arts (CA 64/69/71/72, NY legitimate theatre, WA theater or nonprofit arts, FL 11PA) 15; stadium, arena or sports venue (NY athletic/stadium venues, WA sports entertainment facility, FL 12RT pari-mutuel) 15; civic or event center (FL SCX/SCF/EVNT/DEV) 10; FL full-liquor bar (blank-modifier quota license) 10 |
 | Stage | Licensed 25, Approved 20, In review 10, Received 5 (Florida: only if issued in the last 60 days) |
 | Filing type | new filing or new location 10; change of owner 5 |
+| Venue history | New owner -10 (never Hot); Adding a permit -15 (never Hot, never Attio or Slack); New venue and Unknown 0 |
 
 **Hot** = tier A, not adult, with a score of at least `HOT_MIN_SCORE`
 (default 75). Hot is a label on top of A/B/C, not a fourth tier. Every
@@ -133,6 +134,24 @@ status wording to a stage and names its nightlife licenses
 (`Source.stage` and `Source.nightlife_license` in `src/licmon/sources/`);
 the points table is shared (`src/licmon/qualify.py`). A filing whose stage
 moves up (say Received to Approved) is queued again as "Stage advanced".
+
+**Venue history** (`src/licmon/history.py`, `Source.venue_history`): many
+filings look new but are not. Each qualified lead is compared with the
+state's own list of existing licenses at the same premises (same house
+number, street, ZIP or city, and suite): **New venue** (nothing there, or
+the last license ended over two years ago), **New owner** (a current or
+recent license under another company; the legal names are compared, never
+trade names), **Adding a permit** (the same company already licensed
+there, like a bar adding late hours), **Unknown** (the source cannot
+check). Texas uses TABC License Information (`7hf9-qc9f`), New York the SLA
+active and inactive lists, Chicago the business-license dataset, California
+and Florida their own files; Washington publishes no full license list, so
+it uses its own filing type (ASSUMPTION = New owner, change of class =
+Adding a permit) and is Unknown otherwise. The spreadsheet's **New** tab
+keeps New venue and Unknown; **Existing venues** holds New owner and Adding
+a permit. Only the label, a prior-license count and the earliest prior
+issue date are stored. After a history rule change, run
+`uv run licmon requalify --history` (network, a few minutes).
 
 ## The daily email
 
@@ -147,7 +166,8 @@ The owner's own Google Workspace account sends the email to himself:
 secrets; never write the address into this public repo), and `SMTP_PASSWORD`
 is an app password he makes on his Google account.
 
-The attached workbook has tabs: **New** (the day's leads), **All open**
+The attached workbook has tabs: **New** (the day's new venues and unknown
+history), **Existing venues** (new owner or adding a permit), **All open**
 (every lead not yet reviewed), one tab per state with open leads, and
 **How scoring works**. One row per venue, highest score first; the columns
 are listed under "The spreadsheet" in README.md (`src/licmon/leadsheet.py`). Map, Google and
@@ -182,8 +202,12 @@ set, and both log counts only.
   (venue key, priority, score, stage, market, address, owner, phone,
   license, dates, links) live on the list entry, so the Targets object
   itself is never changed. A venue is matched on its Venue key, so it is
-  never added twice; one that comes back gets only its stage, score and
-  priority updated. If Targets already has a record with the same name
+  never added twice; one that comes back gets only its stage, score,
+  priority and venue history updated. New owner venues go with Venue
+  history "New owner"; Adding a permit venues never go. Before its first
+  write each day the sync adds the **Venue history** text field if it is
+  missing (it came after the list); if the key may not, entries go without
+  it and the log says so. If Targets already has a record with the same name
   (ignoring upper and lower case), that record is reused. Otherwise a new
   Target is made with just the name, client type Venue and status
   Prespecting (Attio's own spelling). The team's **Status** on the list
@@ -200,7 +224,8 @@ set, and both log counts only.
   only creates new things and stops if the list exists.
 - **Slack** posts only when the day has a new filing or a stage-advanced
   lead: counts (Hot, A, B, C), up to five Hot venue names with city and
-  stage (never an adult venue), how many went to Attio and how many of those
+  stage (never an adult venue or one only adding a permit; "New owner" is
+  added after the stage), how many went to Attio and how many of those
   are B, and a link to the Attio list. No addresses, phones or owners. Skill `slack-setup`.
 
 | Name | Kind | Value |
@@ -242,6 +267,14 @@ stored records.
   `gh workflow enable daily-collect`.
 - **Attio says "B leads held back".** The list has no B priority option and
   the daily key cannot add one. See "Attio and Slack" above.
+- **Attio says "the Venue history field is missing".** Same fix as the B
+  option: one `uv run licmon attio-sync --write` with `ATTIO_WRITE_API_KEY`
+  loaded (owner's OK first) adds it.
+- **`history FAILED <source> (<ErrorType>)` in the log.** That state's
+  license list could not be read today. The run stays green and those leads
+  say Unknown. If it keeps happening, check the dataset with a plain GET
+  and see skill `fix-broken-source`; `uv run licmon requalify --history`
+  fills them in once it works again.
 - **Attio step red.** `attio failed (HTTP 401)` or `(HTTP 403)`: the key is
   wrong or lacks a scope (see "Attio and Slack"). The word after the number
   is Attio's reason, for example `quota_exceeded` (the Attio plan's limit).

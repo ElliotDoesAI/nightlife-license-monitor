@@ -8,7 +8,9 @@ description: Set up the Attio "License Leads" list on Targets once, or push the 
 The daily run calls `licmon attio-sync --write` after the email. It sends
 the day's **Hot and A** venues, plus **B** venues with a score of at least
 `ATTIO_MIN_B_SCORE` (default 60), to Attio. Adult venues (marked "(adult)"
-in the spreadsheet) are never sent. Attio is the owner's internal
+in the spreadsheet) are never sent, and neither are venues whose Venue
+history is "Adding a permit" (an existing licensee adding a permit). "New
+owner" venues still go, with Venue history "New owner". Attio is the owner's internal
 CRM: nothing here contacts a business. Ask the owner before any `--write`.
 
 ## How it fits in Attio
@@ -18,7 +20,8 @@ CRM: nothing here contacts a business. Ask the owner before any `--write`.
 - It is also added to a list named **License Leads** (`license_leads`) that
   sits on Targets. All the lead details live on the list entry: Venue key,
   Priority (Hot, A or B), Score, Stage, Market, State, Address, Owner / company, Phone,
-  License, Filing type, Filed on, First seen, Official record, Map, Google,
+  License, Filing type, Filed on, Venue history, First seen, Official record,
+  Map, Google,
   Instagram (links are text: Attio has no link type), and the team's Status
   (New, Moved to Targets, Not a fit, Contacted).
 - The Targets object itself is never changed: no fields are added to it.
@@ -36,10 +39,17 @@ leads wait, and the log says "B leads held back N". Fix it once from the
 owner's Mac with `ATTIO_WRITE_API_KEY` loaded (see "The API key"): run
 `uv run licmon attio-sync --write` (owner's OK first).
 
+It does the same for the **Venue history** text field, which came after the
+list was made: missing, it is added before the first write. If the key
+cannot add it, the sync still runs and entries go without it; the log warns
+"the Venue history field is missing". The same one-time run with
+`ATTIO_WRITE_API_KEY` fixes it. A dry run never adds anything; its log says
+"venue history field added 1" when a real run would add it.
+
 Then, for each venue, highest score first:
 
-1. **Already in the list** (same Venue key): only its Stage, Score and
-   Priority are updated. The team's Status is never touched.
+1. **Already in the list** (same Venue key): only its Stage, Score,
+   Priority and Venue history are updated. The team's Status is never touched.
 2. **Not in the list yet:** if Targets already has a record with the same
    name (upper and lower case ignored), that record is reused. Otherwise a
    new Target is made with only three fields: the name, client type
@@ -122,6 +132,8 @@ Errors show the HTTP number and Attio's reason word, never lead details.
 | Log says | Meaning / fix |
 |---|---|
 | `B leads held back N` | The list has no B priority option and the key cannot add one. See the first step under "What the daily sync does". |
+| `the Venue history field is missing` | Same cause and fix as the B option. Entries still go, without that field. |
+| `adding-a-permit venues left out N` | Normal: venues where the same company already holds a license. They are in the spreadsheet's Existing venues tab. |
 | `attio sync skipped (not configured)` | `ATTIO_API_KEY` secret missing. Set it as above. |
 | `attio failed (HTTP 401 ...)` | Wrong or revoked key. Replace the secret. |
 | `attio failed (HTTP 403 ...)` | The key lacks a scope in the table above. `billing_error` on setup means the plan does not allow that list access setting. |

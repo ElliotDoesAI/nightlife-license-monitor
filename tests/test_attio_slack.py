@@ -125,8 +125,10 @@ class AttioFake(FakeSession):
     name. Answers only the calls the sync makes."""
 
     def __init__(self, entries=None, targets=None, options=("Venue", "Organizer"),
-                 statuses=("Prespecting",), priorities=("Hot", "A", "B")):
+                 statuses=("Prespecting",), priorities=("Hot", "A", "B"),
+                 list_fields=("venue_key", "priority", "venue_history")):
         super().__init__()
+        self.list_fields = list(list_fields)  # the list's attribute slugs
         self.entries = dict(entries or {})   # venue key -> entry id
         self.targets = dict(targets or {})   # name -> record id
         self.options, self.statuses = options, statuses
@@ -159,6 +161,11 @@ class AttioFake(FakeSession):
                 return FakeResp(body={"data": {"title": json["data"]["title"]}})
             return FakeResp(body={"data": [{"title": t, "is_archived": False}
                                            for t in self.priorities]})
+        if path == "/lists/license_leads/attributes":
+            if method == "POST":
+                self.list_fields.append(json["data"]["api_slug"])
+                return FakeResp(body={"data": {"api_slug": json["data"]["api_slug"]}})
+            return FakeResp(body={"data": [{"api_slug": a} for a in self.list_fields]})
         if method == "POST" and path == "/objects/target_client/records":
             rid = f"rec-{len(self.targets) + 1}"
             self.targets[json["data"]["values"]["company_1"]] = rid
@@ -198,7 +205,8 @@ def test_sync_creates_minimal_target_and_list_entry():
                         write=True, cap=25, min_b=60)
     assert counts == {"candidates": 1, "hot": 1, "b": 0, "created": 1, "reused": 0,
                       "added": 1, "updated": 0, "skipped": 0, "options_added": 0,
-                      "b_held": 0, "written": True}
+                      "b_held": 0, "permits_left_out": 0, "history_field_added": 0,
+                      "history_field_missing": False, "written": True}
     [target] = s.made("POST", "/objects/target_client/records")
     assert target == {"data": {"values": {
         "company_1": "Zebra Fake Lounge 1", "client_type": [{"option": "Venue"}],
@@ -234,8 +242,8 @@ def test_sync_updates_existing_entry_without_touching_team_status():
     [patch] = s.made("PATCH", "/lists/license_leads/entries/ent-1")
     assert patch == {"data": {"entry_values": {"stage": "Approved", "score": 91,
                                                "priority": "Hot"}}}
-    # one query, one read of the Priority options, one update
-    assert [m for m, *_ in s.calls] == ["POST", "GET", "PATCH"]
+    # one query, one read of the Priority options, one of the list fields, one update
+    assert [m for m, *_ in s.calls] == ["POST", "GET", "GET", "PATCH"]
 
 
 def test_sync_caps_new_targets_highest_score_first():
@@ -248,7 +256,8 @@ def test_sync_caps_new_targets_highest_score_first():
     # 1 created (venue 1), venue 2 over the cap, 3 updated, 5 reused, 6 over the cap
     assert counts == {"candidates": 5, "hot": 1, "b": 0, "created": 1, "reused": 1,
                       "added": 2, "updated": 1, "skipped": 2, "options_added": 0,
-                      "b_held": 0, "written": True}
+                      "b_held": 0, "permits_left_out": 0, "history_field_added": 0,
+                      "history_field_missing": False, "written": True}
     [target] = s.made("POST", "/objects/target_client/records")
     assert target["data"]["values"]["company_1"] == "Zebra Fake Lounge 1"
     parents = [e["data"]["parent_record_id"]

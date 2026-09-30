@@ -49,6 +49,14 @@ login/JS session, so no per-license GET URL could be verified with curl;
 source_url is the extract URL for every record (verified 2026-09-29 that
 the search landing page offers no stable per-license link).
 
+Venue history (``venue_history``) needs no extra download: the same extract
+lists every license, so a lead's premises is compared with the other rows
+at that address (history.same_premises). A license number listed twice
+with a different owner is a transfer in progress, so the incoming operator
+is "New owner". A license is current when its status maps to Licensed or
+Approved (stage.from_status); otherwise it ended on its Expiration Date.
+Under ``licmon requalify --history`` the extract is downloaded once more.
+
 material_fields: left at the default. The columns that churn on every
 extract (Effective/Expiration dates, tax-stamp/smoking/tobacco flags, mail
 address) live only in raw, outside MATERIAL_FIELDS, so no override is
@@ -62,7 +70,7 @@ import io
 from collections.abc import Iterable
 from datetime import date
 
-from .. import stage
+from .. import history, stage
 from ..http import Http
 from ..models import CATEGORIES, Record, Snapshot, parse_date
 from .base import Source
@@ -393,6 +401,37 @@ class FlAbtSource(Source):
     def fetch(self, http: Http) -> list[Snapshot]:
         return [http.get(EXPORT_URL)]
 
+    def venue_history(self, http: Http, records: list[Record],
+                      snapshots: list[Snapshot] | None = None,
+                      today: date | None = None) -> dict:
+        today = today or date.today()
+        records = [r for r in records if r.zip and history.parse_address(r.address)]
+        if not records:
+            return {}
+        wanted = {_near_key(r.address, r.zip) for r in records}
+        nearby: dict[tuple, list[tuple[dict, history.Prior]]] = {}
+        for snapshot in snapshots or self.fetch(http):
+            text = snapshot.body.decode("latin-1")
+            for row in csv.DictReader(io.StringIO(text)):
+                key = _near_key(_row_address(row), row.get("Location ZIP"))
+                if key in wanted:
+                    nearby.setdefault(key, []).append((row, license_prior(row)))
+        out = {}
+        for rec in records:
+            candidates = [
+                (row, prior) for row, prior in nearby.get(_near_key(rec.address, rec.zip), [])
+                # This license's own row; a second row under another owner
+                # is the outgoing licensee of a transfer and stays.
+                if not (prior.license_id == rec.source_record_id
+                        and history.same_owner(prior.owner, None, rec.legal_name, None))]
+            priors = history.match_priors(
+                rec, candidates,
+                lambda row: (_row_address(row), row.get("Location ZIP"),
+                             row.get("Location City")))
+            out[rec.source_record_id] = history.classify(
+                rec.legal_name, None, rec.application_date, priors, today)
+        return out
+
     def parse(self, snapshots: list[Snapshot]) -> Iterable[Record]:
         for snapshot in snapshots:
             yield from self._parse_snapshot(snapshot)
@@ -458,3 +497,23 @@ class FlAbtSource(Source):
                 category=categorize(series, modifier),
                 raw=dict(row),
             )
+
+
+def _row_address(row: dict) -> str | None:
+    parts = [_clean(row.get(f"Location Address {i}")) for i in (1, 2, 3)]
+    return " ".join(p for p in parts if p) or None
+
+
+def _near_key(address: str | None, zip_code: str | None) -> tuple:
+    return ((zip_code or "").strip()[:5], history.house_number(address))
+
+
+def license_prior(row: dict) -> history.Prior:
+    """One extract row as a history.Prior (memory only)."""
+    status = status_text(_clean(row.get("Primary Status")), _clean(row.get("Secondary Status")))
+    active = stage.from_status(status) in (stage.LICENSED, stage.APPROVED)
+    return history.Prior(license_id=_clean(row.get("License Number")),
+                         owner=_clean(row.get("Owner Name")), active=active,
+                         issued=parse_date(_clean(row.get("Original Licensure Date"))),
+                         ended=None if active else parse_date(
+                             _clean(row.get("Expiration Date"))))

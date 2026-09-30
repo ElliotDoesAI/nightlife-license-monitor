@@ -132,7 +132,7 @@ def parse_date(value) -> date | None:
     if not text:
         return None
     for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d",
-                "%m/%d/%Y", "%m/%d/%y", "%Y%m%d"):
+                "%m/%d/%Y", "%m/%d/%y", "%Y%m%d", "%d-%b-%Y"):
         try:
             return datetime.strptime(text, fmt).date()
         except ValueError:

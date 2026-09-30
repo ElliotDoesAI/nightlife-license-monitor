@@ -108,7 +108,7 @@ def test_xlsx_layout_links_and_no_formulas():
     assert ws.title == "Leads 2026-10-01"
     assert [c.value for c in ws[1]] == leadsheet.HEADERS
     assert ws.freeze_panes == "E2"  # through Business name
-    assert ws.auto_filter.ref == "A1:X3"
+    assert ws.auto_filter.ref == "A1:Y3"
     name_col = leadsheet.HEADERS.index("Business name") + 1
     evil = ws.cell(row=2, column=name_col)
     assert evil.data_type == "s" and evil.value.startswith("=")
@@ -164,7 +164,8 @@ def test_workbook_tabs_come_from_the_data():
         rec(6, tier="B", lead_score=95, dba="FAKE TAPROOM", state="WA",
             queue_date=date(2026, 9, 27))])
     wb = load_workbook(io.BytesIO(leadsheet.build_workbook(new, open_rows)))
-    assert wb.sheetnames == ["New", "All open", "CA", "TX", "WA", "How scoring works"]
+    assert wb.sheetnames == ["New", "Existing venues", "All open", "CA", "TX", "WA",
+                             "How scoring works"]
     new_ws, open_ws = wb["New"], wb["All open"]
     assert [c.value for c in new_ws[1]] == leadsheet.HEADERS
     assert "What's new" in leadsheet.HEADERS and "Stage" in leadsheet.HEADERS
@@ -201,4 +202,4 @@ def test_adult_venue_is_marked_in_business_type():
 
 def test_workbook_without_open_rows_is_valid():
     wb = load_workbook(io.BytesIO(leadsheet.build_workbook([])))
-    assert wb.sheetnames == ["New", "All open", "How scoring works"]
+    assert wb.sheetnames == ["New", "Existing venues", "All open", "How scoring works"]

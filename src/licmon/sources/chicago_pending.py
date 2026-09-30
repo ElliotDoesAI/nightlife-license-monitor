@@ -27,6 +27,11 @@ ownership link use ``"noid-<digest>"``. This is deterministic across runs and
 independent of row order.
 
 Only the stdlib is used for parsing (same regex approach as wa_lcb.py).
+
+Venue history: the list addresses carry no ZIP, so they are matched by city
+(Chicago) and street against the BACP business-license dataset
+(chicago_bacp.chicago_history). The ``acct`` in the ownership link is the
+BACP account number, the owner id there.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import html
 import re
+from datetime import date
 from typing import Iterable
 
 from .. import stage
@@ -163,6 +169,12 @@ def _record_id(
     return f"noid-{digest}"
 
 
+def account_of(source_record_id: str) -> str | None:
+    """BACP account number from an "<acct>-<site>-<digest>" record id."""
+    head = (source_record_id or "").split("-", 1)[0]
+    return head if head.isdigit() else None
+
+
 def _headers(page_html: str) -> list[str]:
     match = _THEAD_RE.search(page_html)
     if not match:
@@ -190,6 +202,14 @@ class ChicagoPendingSource(Source):
         if "LATE HOUR" in text:
             found.append("late_hours")
         return tuple(found)
+
+    def venue_history(self, http: Http, records: list[Record],
+                      snapshots: list[Snapshot] | None = None,
+                      today: date | None = None) -> dict:
+        from .chicago_bacp import chicago_history
+
+        return chicago_history(http, records, today or date.today(), owner_ids={
+            r.source_record_id: account_of(r.source_record_id) for r in records})
 
     def fetch(self, http: Http) -> list[Snapshot]:
         # The two list pages only; no per-row detail requests.

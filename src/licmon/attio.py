@@ -1,7 +1,9 @@
 """Attio CRM: the "License Leads" list on Targets, and the daily sync into it.
 
 Hot, tier A, and tier B venues with a lead score of at least
-ATTIO_MIN_B_SCORE (default 60) go to Attio. Adult venues never do. Each one becomes (or reuses) a record
+ATTIO_MIN_B_SCORE (default 60) go to Attio. Adult venues never do, and
+neither do venues whose history is "Adding a permit" (history.py). A "New
+owner" venue still goes, labeled in the Venue history field. Each one becomes (or reuses) a record
 in the workspace's existing Targets object (``target_client``) and gets an
 entry in the "License Leads" list, whose parent object is Targets. All the
 lead detail lives on the list entry, so the Targets object itself is never
@@ -17,7 +19,10 @@ owner's internal CRM: nothing here contacts a business.
   client type Venue, status Prespecting. New Targets are capped per day
   (ATTIO_DAILY_CAP, default 50), highest score first. Before its first
   write the sync adds any missing Priority option (the live list was made
-  with Hot and A only, before B leads were sent).
+  with Hot and A only, before B leads were sent) and the Venue history text
+  field (added after the list was made). If the key may not change the
+  list, the sync still runs: B leads wait, and entries go without Venue
+  history.
 
 Endpoints and payloads follow the Attio REST API v2 reference
 (docs.attio.com/rest-api/endpoint-reference, checked 2026-09-29). Public
@@ -34,6 +39,8 @@ import re
 import time
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
+
+from .history import ADDING_PERMIT
 
 API = "https://api.attio.com/v2"
 
@@ -53,7 +60,8 @@ TARGET_STATUS_ATTR, TARGET_STATUS = "status", "Prespecting"
 MATCH_ATTRIBUTE = "venue_key"
 STATUS_ATTRIBUTE = "team_status"
 #: The only entry fields a repeat venue has refreshed.
-UPDATE_FIELDS = ("stage", "score", "priority")
+UPDATE_FIELDS = ("stage", "score", "priority", "venue_history")
+HISTORY_ATTRIBUTE = "venue_history"
 DEFAULT_DAILY_CAP = 50
 #: Tier B venues need at least this lead score to go to Attio.
 DEFAULT_MIN_B_SCORE = 60
@@ -79,6 +87,7 @@ ATTRIBUTES: list[tuple[str, str, str, bool, list[str] | None]] = [
     ("license", "License", "text", False, None),
     ("filing_type", "Filing type", "text", False, None),
     ("filed_on", "Filed on", "date", False, None),
+    (HISTORY_ATTRIBUTE, "Venue history", "text", False, None),
     ("first_seen", "First seen", "date", False, None),
     ("official_record", "Official record", "text", False, None),
     ("map_link", "Map", "text", False, None),
@@ -256,14 +265,16 @@ def setup(client: Client | None, write: bool) -> list[str]:
 def _wanted(row: dict, min_b: int) -> bool:
     if row.get("adult"):
         return False  # adult venues stay in the spreadsheet only
+    if row.get("venue_history") == ADDING_PERMIT:
+        return False  # an existing licensee adding a permit: spreadsheet only
     if row.get("hot") or row.get("priority") == "A":
         return True
     return row.get("priority") == "B" and (row.get("lead_score") or 0) >= min_b
 
 
 def candidates(rows: list[dict], min_b: int | None = None) -> list[dict]:
-    """Hot, tier A and strong tier B venues (not adult) with a venue key and
-    a name, highest score first, one row per venue."""
+    """Hot, tier A and strong tier B venues (not adult, not adding a permit)
+    with a venue key and a name, highest score first, one row per venue."""
     min_b = min_b_score() if min_b is None else min_b
     picked = [r for r in rows if r.get("venue_key") and (r.get("business_name") or "").strip()
               and _wanted(r, min_b)]
@@ -300,6 +311,7 @@ def entry_values(row: dict) -> dict:
         "license": row.get("license"),
         "filing_type": row.get("filing"),
         "filed_on": _day(row.get("filed_on")),
+        HISTORY_ATTRIBUTE: row.get("venue_history"),
         "first_seen": _day(row.get("first_seen")),
         "official_record": row.get("record_url"),
         "map_link": row.get("map_url"),
@@ -393,6 +405,27 @@ def ensure_priority_options(client: Client) -> list[str]:
     return added
 
 
+def has_history_attribute(client: Client) -> bool:
+    """Read-only: does the list already have the Venue history field?"""
+    listed = client.request("GET", f"/lists/{LIST_SLUG}/attributes") or {}
+    return any(a.get("api_slug") == HISTORY_ATTRIBUTE for a in listed.get("data") or []
+               if isinstance(a, dict))
+
+
+def ensure_history_attribute(client: Client) -> bool:
+    """Add the Venue history text field to the list if it is missing (the
+    live list was made before it existed). True when this call added it."""
+    if has_history_attribute(client):
+        return False
+    client.request("POST", f"/lists/{LIST_SLUG}/attributes",
+                   body=attribute_payload(HISTORY_ATTRIBUTE, "Venue history", "text", False))
+    return True
+
+
+def _without_history(values: dict) -> dict:
+    return {k: v for k, v in values.items() if k != HISTORY_ATTRIBUTE}
+
+
 def _is_b(row: dict) -> bool:
     return not row.get("hot") and row.get("priority") == "B"
 
@@ -406,13 +439,20 @@ def sync(client: Client | None, rows: list[dict], *, write: bool,
     entries), updated (entries refreshed), skipped (over the daily cap),
     options_added (Priority options made), b_held (B venues held back because
     the B option is missing and this key cannot add it: needs
-    list_configuration:read-write), written. Without a client (dry run with
+    list_configuration:read-write), permits_left_out (adding-a-permit venues
+    that would otherwise qualify), history_field_added (1 when this run made
+    the Venue history field, or would in a dry run), history_field_missing (the field is missing
+    and could not be made, so entries go without it), written. Without a client (dry run with
     no key) every venue counts as a new Target."""
     cap = daily_cap() if cap is None else cap
     picks = candidates(rows, min_b)
+    permits = candidates([dict(r, venue_history=None) for r in rows
+                          if r.get("venue_history") == ADDING_PERMIT], min_b)
     counts = {"candidates": len(picks), "hot": sum(1 for r in picks if r.get("hot")),
               "b": 0, "created": 0, "reused": 0, "added": 0, "updated": 0, "skipped": 0,
-              "options_added": 0, "b_held": 0, "written": bool(write)}
+              "options_added": 0, "b_held": 0, "permits_left_out": len(permits),
+              "history_field_added": 0, "history_field_missing": False,
+              "written": bool(write)}
     if client is None:
         counts["created"] = counts["added"] = min(len(picks), cap)
         counts["skipped"] = len(picks) - counts["added"]
@@ -428,6 +468,15 @@ def sync(client: Client | None, rows: list[dict], *, write: bool,
             # Hot and A still go; B waits until the option exists.
             counts["b_held"] = sum(1 for r in picks if _is_b(r))
             picks = [r for r in picks if not _is_b(r)]
+        try:
+            counts["history_field_added"] = int(ensure_history_attribute(client))
+        except AttioError:
+            # Refused (scope): entries still go, without Venue history.
+            counts["history_field_missing"] = True
+    elif picks:
+        # Dry run: report whether a real run would add the field (read only).
+        counts["history_field_added"] = int(not has_history_attribute(client))
+    fit = _without_history if counts["history_field_missing"] else (lambda v: v)
     targets: dict[str, str | None] = {}  # folded name -> record id, this run
     checked = False
     for row in picks:
@@ -435,7 +484,7 @@ def sync(client: Client | None, rows: list[dict], *, write: bool,
         if entry_id:
             if write:
                 client.request("PATCH", f"/lists/{LIST_SLUG}/entries/{entry_id}",
-                               body={"data": {"entry_values": update_values(row)}})
+                               body={"data": {"entry_values": fit(update_values(row))}})
             counts["updated"] += 1
             counts["b"] += _is_b(row)
             continue
@@ -467,7 +516,7 @@ def sync(client: Client | None, rows: list[dict], *, write: bool,
         if write:
             client.request("POST", f"/lists/{LIST_SLUG}/entries", body={"data": {
                 "parent_record_id": record_id, "parent_object": PARENT_OBJECT,
-                "entry_values": entry_values(row)}})
+                "entry_values": fit(entry_values(row))}})
         counts["added"] += 1
         counts["b"] += _is_b(row)
     return counts

@@ -38,7 +38,11 @@ Rules are deterministic word lists in two files:
   whether something is a lead), also in `qualify.py`: `TIER_POINTS`
   (A 45 / B 25 / C 5), `NIGHTLIFE_LICENSE_POINTS` (highest one counts),
   `STAGE_POINTS` (Licensed 25 / Approved 20 / In review 10 / Received 5),
-  `FILING_POINTS` (new or new location 10, change of owner 5). The How
+  `FILING_POINTS` (new or new location 10, change of owner 5), and the
+  venue history change `SCORE_ADJUST` in `src/licmon/history.py` (New owner
+  -10, Adding a permit -15; `RECENT_DAYS` is how long an ended license
+  still counts, 730). After changing the history rules, run
+  `uv run licmon requalify --history` (network). The How
   scoring works tab in the workbook is built from these, so it stays in
   step. Which license is "nightlife" and how a status maps to a stage live
   in each source's `nightlife_license` and `stage` methods

@@ -34,13 +34,27 @@ tell the owner and suggest a public-records request instead.
    `stage_counts(rec, today)` (see `fl_abt.py`). Both read normalized fields
    only, never `rec.raw`, because `licmon requalify` has no raw rows. The
    shared points table does not change per state.
+   Venue history: override `venue_history(http, records, snapshots, today)`
+   (contract in `sources/base.py`, rules in `src/licmon/history.py`). First
+   use the state's own filing type if it says so (see `wa_lcb.py`: an
+   ownership transfer is `history.NEW_OWNER`, an added class is
+   `history.ADDING_PERMIT`). Otherwise find the state's official list of
+   existing licenses (active and, if there is one, inactive), turn each
+   license at the same premises into a `history.Prior` and call
+   `history.classify`. Socrata lists: `socrata.rows_near` does the batched
+   ZIP + house-number queries (`tx_tabc.py`, `ny_sla.py`). A source whose
+   own download already lists licenses reuses `snapshots` (`fl_abt.py`,
+   `ca_abc.py`). If there is no such list, or it is behind a login or bot
+   protection, return `{}` (Unknown) and say so in the module docstring.
+   Never store or log other businesses' names.
 4. Register it in `src/licmon/sources/__init__.py` and bump the source count
    in the registry test (`tests/test_socrata_sources.py`).
 5. New state: add its metros and counties to `METRO_COUNTIES` in
    `src/licmon/metros.py`. Make sure the parser's county names match.
 6. Test with a synthetic fixture (fake names/addresses) in `tests/fixtures/`
    and `tests/test_<name>.py`, no network. Add the new source's stage and
-   nightlife-license cases to `tests/test_stage_score.py`. Run the full suite on the
+   nightlife-license cases to `tests/test_stage_score.py`, and its venue
+   history cases (fake HTTP, synthetic rows) to `tests/test_history.py`. Run the full suite on the
    disposable database (AGENTS.md, "Developing").
 7. `uv run licmon probe --source <name>`: record count, how many in target
    metros, category mix. Sanity-check a few parsed records against the

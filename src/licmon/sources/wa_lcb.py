@@ -9,6 +9,16 @@ The report is a single large HTML page (latin-1/windows-1252) with three
 sections -- new applications, recently approved licenses, discontinued
 licenses. Each record is one ``<tbody>`` of label/value rows. Only the
 stdlib is used for parsing.
+
+Venue history comes from the report's own Application Type only. The LCB
+licensee list (https://lcb.wa.gov/taxreporting/licensee-list, checked
+2026-09-30) covers manufacturers, distributors, spirits retailers and
+public houses, not taverns, restaurants or nightclubs, and data.wa.gov's
+"Liquor Renewal" set (9dee-kzm5) is a partial renewal notice list last
+updated April 2026. Neither is a full list of existing licenses, so no
+address check: ASSUMPTION is "New owner", ADDED/CHANGE OF CLASS/IN LIEU is
+"Adding a permit", everything else (NEW APPLICATION, CHANGE OF LOCATION,
+ADDED/CHANGE OF TRADENAME) stays Unknown.
 """
 
 from __future__ import annotations
@@ -17,7 +27,7 @@ import html
 import re
 from typing import Iterable
 
-from .. import stage
+from .. import history, stage
 from ..http import Http
 from ..models import Record, Snapshot, parse_date
 from .base import Source
@@ -85,6 +95,13 @@ PRIVILEGE_CODES = {
     "346": "wholesale_mfg", "347": "wholesale_mfg", "348B": "wholesale_mfg",
     "348W": "wholesale_mfg", "354": "wholesale_mfg", "355": "wholesale_mfg",
     "356": "wholesale_mfg", "357": "wholesale_mfg",
+}
+
+
+#: Application Type -> venue history (see the module docstring).
+HISTORY_BY_TYPE = {
+    "ASSUMPTION": history.NEW_OWNER,
+    "ADDED/CHANGE OF CLASS/IN LIEU": history.ADDING_PERMIT,
 }
 
 
@@ -348,6 +365,16 @@ class WaLcbSource(Source):
 
     def fetch(self, http: Http) -> list[Snapshot]:
         return [http.get(URL)]
+
+    def venue_history(self, http: Http, records: list[Record],
+                      snapshots: list[Snapshot] | None = None,
+                      today=None) -> dict:
+        out = {}
+        for rec in records:
+            label = HISTORY_BY_TYPE.get((rec.application_type or "").upper())
+            if label:
+                out[rec.source_record_id] = history.History(label)
+        return out
 
     def stage(self, rec: Record) -> str | None:
         # The report section: approved in this report means issued.

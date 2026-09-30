@@ -56,6 +56,26 @@ class Source(ABC):
         qualify.NIGHTLIFE_LICENSE_POINTS. Default: none."""
         return ()
 
+    def venue_history(self, http: Http, records: list[Record],
+                      snapshots: list[Snapshot] | None = None,
+                      today: date | None = None) -> dict:
+        """Venue history for qualified records: {source_record_id:
+        history.History}. Anything missing counts as Unknown (the default:
+        this source cannot check).
+
+        Use this state's own filing type when it already says so (e.g. an
+        ASSUMPTION is a new owner), else compare with the state's list of
+        existing licenses: find licenses at the same premises
+        (history.same_premises, socrata.rows_near for Socrata lists), turn
+        each into a history.Prior and call history.classify. `snapshots` is
+        this run's download when the source's own file already holds existing
+        licenses (FL, CA); it is None under `licmon requalify --history`, so
+        fetch again then. `rec.raw` is available here. Called for a few
+        hundred records a day: batch the queries. Never store or log other
+        businesses' names; exceptions are caught by history.lookup and turn
+        every record Unknown."""
+        return {}
+
     @abstractmethod
     def fetch(self, http: Http) -> list[Snapshot]:
         """Download raw payload(s). Must not modify bytes."""

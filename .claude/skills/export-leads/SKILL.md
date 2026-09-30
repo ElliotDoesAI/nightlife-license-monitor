@@ -20,12 +20,15 @@ Desktop (or another folder outside the repo) only.
    | plain CSV instead of Excel | end the file name in `.csv` |
    | raw wide columns (troubleshooting) | `--full` or `--per-record` with a `.csv` name (CSV only) |
 
-   The Excel file has tabs: New (the rows asked for), All open (every lead
-   not yet reviewed, all days), one tab per state with open leads, and How
-   scoring works. One clean row per venue, highest Score first: Priority,
+   The Excel file has tabs: New (the rows asked for, new venues and unknown
+   history), Existing venues (the same day's New owner and Adding a permit
+   rows: venues that have been open before), All open (every lead not yet
+   reviewed, all days), one tab per state with open leads, and How scoring
+   works. One clean row per venue, highest Score first: Priority,
    Hot, Score, Business name, What's new (New filing / Stage advanced /
    Details changed; the open tabs show Queued on instead), Company / owner,
-   Business type, Filing, Stage, Filed on, Phone, Owner / applicant names,
+   Business type, Filing, Venue history (New venue / New owner / Adding a
+   permit / Unknown), Stage, Filed on, Phone, Owner / applicant names,
    Address, City, State, ZIP, Market, Mailing address, License applied for,
    Map, Google and Instagram search links, Official record link, Lead ID.
    Frozen header, filters on, Priority colored (A green, B amber, C gray),

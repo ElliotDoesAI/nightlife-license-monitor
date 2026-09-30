@@ -84,6 +84,11 @@ ALTER TABLE records ADD COLUMN IF NOT EXISTS stage TEXT;        -- Licensed | Ap
 ALTER TABLE records ADD COLUMN IF NOT EXISTS lead_score INTEGER; -- 0 to 100
 ALTER TABLE records ADD COLUMN IF NOT EXISTS hot BOOLEAN;        -- tier A, not adult, lead_score >= HOT_MIN_SCORE
 ALTER TABLE records ADD COLUMN IF NOT EXISTS adult BOOLEAN;      -- adult entertainment: never Hot, Attio or Slack
+-- Venue history (history.py). Only the label and a small summary: never
+-- other businesses' names or the downloaded license lists.
+ALTER TABLE records ADD COLUMN IF NOT EXISTS venue_history TEXT;  -- New venue | New owner | Adding a permit | Unknown
+ALTER TABLE records ADD COLUMN IF NOT EXISTS prior_licenses INTEGER; -- prior licenses found at the premises
+ALTER TABLE records ADD COLUMN IF NOT EXISTS prior_since DATE;   -- earliest original issue date among them
 CREATE INDEX IF NOT EXISTS records_queue_idx ON records (qualified, review_status, metro);
 CREATE INDEX IF NOT EXISTS records_venue_idx ON records (venue_key);
 
@@ -133,7 +138,10 @@ SELECT
     r.stage,
     r.lead_score,
     r.hot,
-    r.adult
+    r.adult,
+    r.venue_history,
+    r.prior_licenses,
+    r.prior_since
 FROM record_events e
 JOIN records r ON r.id = e.record_id
 WHERE e.queued;
@@ -174,6 +182,13 @@ SELECT
                                          ELSE 0 END DESC, record_id))[1] AS stage,
     max(lead_score) AS lead_score,
     coalesce(bool_or(hot), false) AS hot,
-    coalesce(bool_or(adult), false) AS adult
+    coalesce(bool_or(adult), false) AS adult,
+    -- Best label wins (history.LABELS order).
+    (array_agg(venue_history ORDER BY CASE coalesce(venue_history, 'Unknown')
+                                     WHEN 'New venue' THEN 1 WHEN 'Unknown' THEN 2
+                                     WHEN 'New owner' THEN 3 WHEN 'Adding a permit' THEN 4
+                                     ELSE 2 END, record_id))[1] AS venue_history,
+    max(prior_licenses) AS prior_licenses,
+    min(prior_since) AS prior_since
 FROM review_queue
 GROUP BY queue_date, venue_key;
